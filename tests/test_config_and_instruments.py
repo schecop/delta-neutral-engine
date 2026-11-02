@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from delta_neutral.config import AppConfig, load_config
+from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
+
+EXAMPLE = Path(__file__).parent.parent / "config" / "example.yaml"
+
+
+def _example_dict() -> dict[str, Any]:
+    with EXAMPLE.open(encoding="utf-8") as f:
+        data: dict[str, Any] = yaml.safe_load(f)
+    return data
+
+
+def test_example_config_loads() -> None:
+    config = load_config(EXAMPLE)
+    assert config.mode == "dry_run"
+    assert config.risk.max_unhedged_seconds == 60
+    assert config.risk.min_free_margin == Decimal("0.40")
+
+
+def test_rebalance_threshold_must_be_below_min_free_margin() -> None:
+    data = _example_dict()
+    data["risk"]["rebalance_below_free_margin"] = "0.60"
+    with pytest.raises(ValidationError, match="rebalance_below_free_margin"):
+        AppConfig.model_validate(data)
+
+
+def test_leverage_cannot_exceed_venue_max() -> None:
+    data = _example_dict()
+    data["risk"]["leverage_per_leg"] = "10"
+    with pytest.raises(ValidationError, match="exceeds"):
+        AppConfig.model_validate(data)
+
+
+def test_typo_in_config_is_an_error() -> None:
+    data = _example_dict()
+    data["risk"]["max_unhedged_secs"] = 60
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_registry_round_trip_and_common_pairs() -> None:
+    registry = InstrumentRegistry(
+        {"XAU-USD": {"a": "GOLD", "b": "XAUUSD"}, "TSLA-USD": {"a": "TSLA"}}
+    )
+    assert registry.venue_symbol("XAU-USD", "b") == "XAUUSD"
+    assert registry.canonical("a", "GOLD") == "XAU-USD"
+    assert registry.common(["a", "b"]) == ["XAU-USD"]
+    with pytest.raises(UnknownInstrumentError):
+        registry.venue_symbol("TSLA-USD", "b")
+
+
+def test_registry_rejects_ambiguous_mapping() -> None:
+    with pytest.raises(ValueError, match="maps to both"):
+        InstrumentRegistry({"XAU-USD": {"a": "GOLD"}, "XAG-USD": {"a": "GOLD"}})

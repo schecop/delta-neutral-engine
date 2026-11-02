@@ -1,0 +1,20 @@
+# Secrets and strategy: never committed
+.env
+private/
+config/local.yaml
+*.key
+*.pem
+wallets/
+
+# Collected market data and run outputs
+data/
+runs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/

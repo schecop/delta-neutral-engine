@@ -1,0 +1,38 @@
+[project]
+name = "delta-neutral"
+version = "0.1.0"
+description = "Venue-agnostic hedged execution engine for perpetual-futures venues."
+authors = [{ name = "Pablo Sala" }]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "types-pyyaml>=6.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error"]

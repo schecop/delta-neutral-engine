@@ -1,0 +1,43 @@
+# Example config with illustrative values only. Copy it to config/local.yaml (gitignored)
+# and set your own values there. Nothing in this file is a recommendation.
+
+mode: dry_run            # dry_run | live (live only after a clean dry run and an explicit go-ahead)
+
+venues:
+  variational:
+    enabled: true
+    adapter: variational
+    max_leverage: "5"      # engine-side cap; must be <= what the venue allows
+  qfex:
+    enabled: true
+    adapter: qfex
+    max_leverage: "5"
+
+# canonical symbol -> {venue: venue-native symbol}
+instruments:
+  XAU-USD:
+    variational: XAU-PERP
+    qfex: GOLD-USD
+
+risk:
+  leverage_per_leg: "2"
+  min_free_margin: "0.40"              # keep at least this fraction of free margin per venue
+  rebalance_below_free_margin: "0.25"  # rebalance when a venue drops below this
+  max_unhedged_seconds: 60
+  min_hold_minutes: 30
+  max_hold_minutes: 120
+  weekend:
+    action: close                      # close | reduce_half | none
+    before_us_close_minutes: 30
+
+sizing:
+  notional_per_leg_usd: "100"
+
+# The model per role is chosen in docs/model-research.md, never hardcoded.
+llm:
+  supervisor:
+    provider: TBD
+    model: TBD
+
+alerts:
+  telegram_enabled: true
