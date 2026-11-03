@@ -127,3 +127,29 @@ def test_scaled_contract_is_quoted_in_canonical_units() -> None:
     # 2 index units are ~$15k: the 100k tier, picked from the canonical notional
     big = asyncio.run(variational_venue().get_quote("US500-USD", Decimal(2)))
     assert big.bid == Decimal(raw["quotes"]["size_100k"]["bid"]) * 10
+
+
+def test_concurrent_reads_share_one_request() -> None:
+    # Regression (FAILURES.md 2026-11-03): the collector reads every pair at once; each read saw
+    # an empty cache and fetched on its own, so the adapter tripped the venue's rate limit itself
+    calls = 0
+    stats = variational_stats()
+
+    async def count(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)  # network latency: without it no request ever overlaps another
+        return httpx.Response(200, json=stats)
+
+    async def run() -> None:
+        venue = variational_venue()
+        venue._client = httpx.AsyncClient(
+            base_url="https://x.test", transport=httpx.MockTransport(count)
+        )
+        await asyncio.gather(
+            *(venue.get_quote(i, Decimal("0.1")) for i in ("XAU-USD", "NVDA-USD", "US500-USD")),
+            *(venue.get_funding(i) for i in ("XAU-USD", "NVDA-USD", "US500-USD")),
+        )
+
+    asyncio.run(run())
+    assert calls == 1

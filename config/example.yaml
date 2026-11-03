@@ -48,3 +48,7 @@ llm:
 
 alerts:
   telegram_enabled: true
+
+collector:
+  interval_seconds: 30     # one snapshot of every configured pair on every venue
+  db_path: data/market.db  # SQLite; data/ is gitignored

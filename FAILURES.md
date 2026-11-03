@@ -27,3 +27,11 @@ Every real failure found while building or running the engine. These become the 
 - **Fix:** `aclose()` is now part of `VenueAdapter`. Each adapter closes what it created and leaves injected clients to their owner; the quotes command closes every venue in a `finally`.
 - **Regression test / eval added:** `test_aclose_releases_the_adapter` in the conformance suite (every adapter); the live tests run inside one event loop and close the adapter in `finally`, and now exit with no warnings.
 - **Class:** venue API
+
+## 2026-11-03 · Cache stampede: the adapter tripped the venue's rate limit by itself
+- **Symptom:** the first live collector run logged a burst of `429 Too Many Requests` from the read-only stats endpoint in every tick, and ticks took about 4.4s.
+- **Found by:** log. The collector's request log showed several stats requests within the same second, in a tick that should need one.
+- **Root cause:** the collector reads every pair on every venue at once, and the adapter's snapshot cache was checked without a lock. Each of the nine concurrent reads (three pairs × probe quote, sized quote, funding) found the cache cold and fetched on its own. That is far past the endpoint's 10 requests per 10s per IP, so the adapter was rate-limiting itself. The QFEX refdata cache had the same pattern on its first load.
+- **Fix:** single-flight caching. A per-event-loop lock (`venues/_sync.py`) wraps the cache check and the fetch: the first read fetches, the others wait and reuse its result. Ticks dropped to about 0.4s with no 429s.
+- **Regression test / eval added:** `test_concurrent_reads_share_one_request` (Variational) and `test_concurrent_reads_share_one_refdata_request` (QFEX) assert one HTTP request for many concurrent reads. Their first version passed on the buggy code: a synchronous mock handler never yields to the event loop, so requests never overlapped. The handler now awaits a short sleep to model network latency, and both tests fail on the old code (6 and 3 requests).
+- **Class:** venue API

@@ -17,14 +17,13 @@ from delta_neutral.config import AppConfig, load_config
 from delta_neutral.instruments import UnknownInstrumentError
 from delta_neutral.models import Quote
 from delta_neutral.price_guard import check_divergence
-from delta_neutral.venues.base import VenueAdapter
+from delta_neutral.venues.base import VenueAdapter, quote_for_notional
 from delta_neutral.venues.factory import build_venues
 
 
 async def _row(venue: VenueAdapter, instrument: str, size_usd: Decimal) -> tuple[str, Quote | None]:
     try:
-        probe = await venue.get_quote(instrument, Decimal(1))
-        quote = await venue.get_quote(instrument, size_usd / probe.mid)
+        quote = await quote_for_notional(venue, instrument, size_usd)
         funding = await venue.get_funding(instrument)
     except UnknownInstrumentError:
         return f"  {venue.name:<12} not listed", None

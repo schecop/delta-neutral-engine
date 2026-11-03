@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import httpx
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
@@ -15,7 +16,7 @@ from delta_neutral.instruments import UnknownInstrumentError, VenueSymbol
 from delta_neutral.models import Execution
 from delta_neutral.venues.base import NotTradableError, VenueUnavailableError, as_trading
 from delta_neutral.venues.qfex import WebSocketFeed
-from tests.venues.recorded import qfex_market_stats, qfex_venue
+from tests.venues.recorded import FIXTURES, QFEX_QUOTABLE, qfex_market_stats, qfex_venue
 
 
 def test_declares_api_but_cannot_trade_yet() -> None:
@@ -161,3 +162,25 @@ def test_scaled_contract_is_quoted_in_canonical_units() -> None:
     assert (quote.bid, quote.ask) == (Decimal(39285), Decimal(39289))
     assert not quote.indicative  # 0.05 fits the 0.0763 on the ask
     assert asyncio.run(venue.get_quote("XAU-USD", Decimal("0.01"))).indicative  # 0.1 does not
+
+
+def test_concurrent_reads_share_one_refdata_request() -> None:
+    # Same stampede as Variational's stats (FAILURES.md 2026-11-03), on the first refdata load
+    calls = 0
+    refdata = json.loads((FIXTURES / "qfex" / "refdata.json").read_text(encoding="utf-8"))
+
+    async def count(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)  # network latency: without it no request ever overlaps another
+        return httpx.Response(200, json=refdata)
+
+    async def run() -> None:
+        venue = qfex_venue()
+        venue._client = httpx.AsyncClient(
+            base_url="https://x.test", transport=httpx.MockTransport(count)
+        )
+        await asyncio.gather(*(venue.get_quote(i, Decimal("0.01")) for i in QFEX_QUOTABLE))
+
+    asyncio.run(run())
+    assert calls == 1

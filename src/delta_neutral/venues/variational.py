@@ -26,6 +26,7 @@ import httpx
 
 from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
 from delta_neutral.models import Execution, FundingRate, Quote
+from delta_neutral.venues._sync import LoopLock
 from delta_neutral.venues.base import VenueUnavailableError
 
 BASE_URL = "https://omni-client-api.prod.ap-northeast-1.variational.io"  # D1 V1, docs api page
@@ -70,11 +71,16 @@ class VariationalVenue:
         self._sleep = sleep
         self._clock = clock
         self._cached: tuple[float, dict[str, dict[str, Any]]] | None = None
+        self._fetch_lock = LoopLock()
 
     async def _listings(self) -> dict[str, dict[str, Any]]:
-        """ticker -> listing, fetched at most once per `cache_seconds`."""
-        if self._cached and time.monotonic() - self._cached[0] < self._cache_seconds:
-            return self._cached[1]
+        """ticker -> listing, fetched at most once per `cache_seconds`, however many callers."""
+        async with self._fetch_lock():
+            if self._cached and time.monotonic() - self._cached[0] < self._cache_seconds:
+                return self._cached[1]
+            return await self._fetch()
+
+    async def _fetch(self) -> dict[str, dict[str, Any]]:
         for attempt in range(self._max_retries + 1):
             response = await self._client.get(STATS_PATH)
             if response.status_code != 429:

@@ -70,6 +70,11 @@ class AlertsConfig(_Strict):
     telegram_enabled: bool = True
 
 
+class CollectorConfig(_Strict):
+    interval_seconds: int = Field(ge=5)  # Variational's read API allows 10 req/10s per IP
+    db_path: Path
+
+
 class AppConfig(_Strict):
     mode: Literal["dry_run", "live"]
     venues: dict[str, VenueConfig]
@@ -78,6 +83,7 @@ class AppConfig(_Strict):
     sizing: SizingConfig
     llm: dict[str, ModelChoice]
     alerts: AlertsConfig
+    collector: CollectorConfig
 
     @model_validator(mode="after")
     def _cross_checks(self) -> AppConfig:

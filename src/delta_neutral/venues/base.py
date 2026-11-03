@@ -80,6 +80,12 @@ class TradingVenue(VenueAdapter, Protocol):
     async def get_margin(self) -> MarginState: ...
 
 
+async def quote_for_notional(venue: VenueAdapter, instrument: str, usd: Decimal) -> Quote:
+    """A quote for `usd` of notional: a 1-unit probe gives the mid, then the real size."""
+    probe = await venue.get_quote(instrument, Decimal(1))
+    return await venue.get_quote(instrument, usd / probe.mid)
+
+
 def as_trading(venue: VenueAdapter) -> TradingVenue:
     """The only door to order placement: refuses manual venues, whatever methods they have."""
     if venue.execution is not Execution.API:

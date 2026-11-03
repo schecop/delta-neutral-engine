@@ -34,6 +34,7 @@ import websockets
 
 from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
 from delta_neutral.models import Execution, FundingRate, Quote
+from delta_neutral.venues._sync import LoopLock
 from delta_neutral.venues.base import VenueUnavailableError
 
 log = logging.getLogger(__name__)
@@ -156,15 +157,18 @@ class QfexVenue:
         self._refdata_seconds = refdata_seconds
         self._clock = clock
         self._active: tuple[float, set[str]] | None = None
+        self._refdata_lock = LoopLock()
 
     async def _active_symbols(self) -> set[str]:
-        if self._active and time.monotonic() - self._active[0] < self._refdata_seconds:
-            return self._active[1]
-        response = await self._client.get("/refdata")
-        response.raise_for_status()
-        active = {s["symbol"] for s in response.json()["data"] or [] if s["status"] == "ACTIVE"}
-        self._active = (time.monotonic(), active)
-        return active
+        async with self._refdata_lock():  # single-flight: concurrent reads share one request
+            if self._active and time.monotonic() - self._active[0] < self._refdata_seconds:
+                return self._active[1]
+            response = await self._client.get("/refdata")
+            response.raise_for_status()
+            data = response.json()["data"] or []
+            active = {s["symbol"] for s in data if s["status"] == "ACTIVE"}
+            self._active = (time.monotonic(), active)
+            return active
 
     async def _symbol(self, instrument: str) -> str:
         symbol = self._registry.venue_symbol(instrument, self.name)
