@@ -1,0 +1,290 @@
+{
+ "total_volume_24h": "2309884223.059534",
+ "cumulative_volume": "455825687252.427297",
+ "tvl": "225855043.954162238319",
+ "open_interest": "1854292352.3865715088867261198",
+ "num_markets": 7,
+ "loss_refund": {
+  "pool_size": "0",
+  "refunded_24h": "0"
+ },
+ "listings": [
+  {
+   "ticker": "W-PERP",
+   "contract_type": "perpetual",
+   "name": "Wormhole",
+   "mark_price": "0.01092500362168616",
+   "volume_24h": "30330.148970",
+   "open_interest": {
+    "long_open_interest": "65843.249952293651581020000000",
+    "short_open_interest": "18926.484556630683003300000000"
+   },
+   "funding": {
+    "last": {
+     "annualized_rate": "-0.05840",
+     "interval_rate": "-0.00002667"
+    },
+    "next": {
+     "annualized_rate": "-0.05840",
+     "interval_rate": "-0.00002667"
+    },
+    "interval_seconds": 14400,
+    "next_timestamp": 1793736000
+   },
+   "base_spread_bps": "9.153315043438497854370115000",
+   "quotes": {
+    "updated_at": "2026-11-03T19:23:39.423587997Z",
+    "base": {
+     "bid": "0.01092",
+     "ask": "0.01093"
+    },
+    "size_1k": {
+     "bid": "0.01091",
+     "ask": "0.01094"
+    },
+    "size_100k": {
+     "bid": "0.01087",
+     "ask": "0.01099"
+    }
+   }
+  },
+  {
+   "ticker": "BTC-PERP",
+   "contract_type": "perpetual",
+   "name": "Bitcoin",
+   "mark_price": "77574.9689034534",
+   "volume_24h": "358823286.503146",
+   "open_interest": {
+    "long_open_interest": "82157919.73619281246619244000",
+    "short_open_interest": "90005280.66461586765834747000"
+   },
+   "funding": {
+    "last": {
+     "annualized_rate": "0.1095",
+     "interval_rate": "0.0001"
+    },
+    "next": {
+     "annualized_rate": "0.1095",
+     "interval_rate": "0.0001"
+    },
+    "interval_seconds": 28800,
+    "next_timestamp": 1793750400
+   },
+   "base_spread_bps": "1.3393495539690082976020820000",
+   "quotes": {
+    "updated_at": "2026-11-03T19:23:39.067605988Z",
+    "base": {
+     "bid": "77545.2",
+     "ask": "77555.59"
+    },
+    "size_1k": {
+     "bid": "77545.2",
+     "ask": "77555.59"
+    },
+    "size_100k": {
+     "bid": "77544.65",
+     "ask": "77555.59"
+    },
+    "size_1m": {
+     "bid": "77521.42",
+     "ask": "77559.45"
+    }
+   }
+  },
+  {
+   "ticker": "XAU-PERP",
+   "contract_type": "perpetual",
+   "name": "Gold",
+   "mark_price": "3927.561281427494",
+   "volume_24h": "23021866.884124",
+   "open_interest": {
+    "long_open_interest": "16723456.574286465976487240000",
+    "short_open_interest": "22221378.031910219072282960000"
+   },
+   "funding": {
+    "last": {
+     "annualized_rate": "0.2779",
+     "interval_rate": "0.0001269"
+    },
+    "next": {
+     "annualized_rate": "0.2779",
+     "interval_rate": "0.0001269"
+    },
+    "interval_seconds": 14400,
+    "next_timestamp": 1793736000
+   },
+   "base_spread_bps": "3.1062532512709367888793950000",
+   "quotes": {
+    "updated_at": "2026-11-03T19:23:09.715683562Z",
+    "base": {
+     "bid": "3927.73",
+     "ask": "3928.95"
+    },
+    "size_1k": {
+     "bid": "3927.73",
+     "ask": "3928.95"
+    },
+    "size_100k": {
+     "bid": "3927.61",
+     "ask": "3928.95"
+    },
+    "size_1m": {
+     "bid": "3927.18",
+     "ask": "3929.57"
+    }
+   }
+  },
+  {
+   "ticker": "XAU-SWAP",
+   "contract_type": "swap",
+   "name": "Swap on Gold Spot",
+   "mark_price": "3923.62",
+   "volume_24h": "159309788.783573",
+   "open_interest": {
+    "long_open_interest": "45685338.83100000000000",
+    "short_open_interest": "6712211.09857320000000"
+   },
+   "funding": {
+    "last": {
+     "annualized_long_rate": "0.05520",
+     "annualized_short_rate": "0.02394",
+     "interval_long_rate": "0.0001533",
+     "interval_short_rate": "0.00006649"
+    },
+    "next": {
+     "annualized_long_rate": "0.05734",
+     "annualized_short_rate": "0.02381",
+     "interval_long_rate": "0.0001593",
+     "interval_short_rate": "0.00006614"
+    },
+    "interval_seconds": 86400,
+    "next_timestamp": 1793743500
+   },
+   "base_spread_bps": "0.2548666792400895091777490000",
+   "quotes": {
+    "updated_at": "2026-11-03T19:23:45.492852881Z",
+    "base": {
+     "bid": "3923.51",
+     "ask": "3923.61"
+    },
+    "size_1k": {
+     "bid": "3923.51",
+     "ask": "3923.61"
+    },
+    "size_100k": {
+     "bid": "3923.34",
+     "ask": "3923.78"
+    },
+    "size_1m": {
+     "bid": "3923.06",
+     "ask": "3924.06"
+    }
+   }
+  },
+  {
+   "ticker": "US500-PERP",
+   "contract_type": "perpetual",
+   "name": "State Street SPDR S&P 500 ETF Trust",
+   "mark_price": "756.532772513151",
+   "volume_24h": "2273703.915173",
+   "open_interest": {
+    "long_open_interest": "9751651.562048604248455200000",
+    "short_open_interest": "6197364.0071872331727498000000"
+   },
+   "funding": {
+    "last": {
+     "annualized_rate": "0.02271",
+     "interval_rate": "0.00002074"
+    },
+    "next": {
+     "annualized_rate": "0.02271",
+     "interval_rate": "0.00002074"
+    },
+    "interval_seconds": 28800,
+    "next_timestamp": 1793750400
+   },
+   "base_spread_bps": "3.7804046353461626127248340000",
+   "quotes": {
+    "updated_at": "2026-11-03T19:23:41.168184463Z",
+    "base": {
+     "bid": "756.267",
+     "ask": "756.553"
+    },
+    "size_1k": {
+     "bid": "756.267",
+     "ask": "756.553"
+    },
+    "size_100k": {
+     "bid": "756.217",
+     "ask": "756.604"
+    }
+   }
+  },
+  {
+   "ticker": "COCOA-SWAP",
+   "contract_type": "swap",
+   "name": "Swap on Cocoa",
+   "mark_price": "5503.8",
+   "volume_24h": "698221.132322",
+   "open_interest": {
+    "long_open_interest": "272158.1216940000000",
+    "short_open_interest": "69557.1895140000000"
+   },
+   "funding": {
+    "last": {
+     "annualized_long_rate": "0.07437",
+     "annualized_short_rate": "0.07437",
+     "interval_long_rate": "0.0002066",
+     "interval_short_rate": "0.0002066"
+    },
+    "next": {
+     "annualized_long_rate": "0.07051",
+     "annualized_short_rate": "0.07051",
+     "interval_long_rate": "0.0001959",
+     "interval_short_rate": "0.0001959"
+    },
+    "interval_seconds": 86400,
+    "next_timestamp": 1793743500
+   }
+  },
+  {
+   "ticker": "NVDA-PERP",
+   "contract_type": "perpetual",
+   "name": "NVIDIA Corporation",
+   "mark_price": "207.5950505287662",
+   "volume_24h": "5275412.947218",
+   "open_interest": {
+    "long_open_interest": "4061401.3100403423795086400000",
+    "short_open_interest": "1970436.9553851910695643200000"
+   },
+   "funding": {
+    "last": {
+     "annualized_rate": "0",
+     "interval_rate": "0"
+    },
+    "next": {
+     "annualized_rate": "0",
+     "interval_rate": "0"
+    },
+    "interval_seconds": 28800,
+    "next_timestamp": 1793750400
+   },
+   "base_spread_bps": "5.6841432249681155050559460000",
+   "quotes": {
+    "updated_at": "2026-11-03T19:23:14.373216297Z",
+    "base": {
+     "bid": "207.426",
+     "ask": "207.544"
+    },
+    "size_1k": {
+     "bid": "207.426",
+     "ask": "207.544"
+    },
+    "size_100k": {
+     "bid": "207.338",
+     "ask": "207.607"
+    }
+   }
+  }
+ ]
+}

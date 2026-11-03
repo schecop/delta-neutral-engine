@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from delta_neutral.config import AppConfig, load_config
 from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
 from delta_neutral.models import Execution
+from delta_neutral.venues.factory import AdapterNotAvailableError, build_venues
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "example.yaml"
 
@@ -76,3 +77,17 @@ def test_example_declares_execution_per_venue() -> None:
     config = load_config(EXAMPLE)
     assert config.venues["variational"].execution is Execution.MANUAL
     assert config.venues["qfex"].execution is Execution.API
+
+
+def test_factory_rejects_execution_mismatch() -> None:
+    data = _example_dict()
+    data["venues"]["variational"]["execution"] = "api"
+    with pytest.raises(ValueError, match="execution"):
+        build_venues(AppConfig.model_validate(data), skip_missing=True)
+
+
+def test_factory_requires_every_adapter_unless_told() -> None:
+    config = load_config(EXAMPLE)
+    with pytest.raises(AdapterNotAvailableError, match="qfex"):
+        build_venues(config)
+    assert list(build_venues(config, skip_missing=True)) == ["variational"]

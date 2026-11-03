@@ -21,12 +21,14 @@ from delta_neutral.instruments import UnknownInstrumentError
 from delta_neutral.models import Execution, OrderRequest, OrderStatus, Side
 from delta_neutral.venues.base import NotTradableError, TradingVenue, VenueAdapter, as_trading
 from delta_neutral.venues.fake import FakeVenue
+from tests.venues.recorded import variational_venue
 
 _FAKE_MIDS = {"XAU-USD": Decimal(2400), "EUR-USD": Decimal("1.08")}
 
 ADAPTER_FACTORIES: dict[str, Callable[[], VenueAdapter]] = {
     "fake-api": lambda: FakeVenue("fake-api", _FAKE_MIDS),
     "fake-manual": lambda: FakeVenue("fake-manual", _FAKE_MIDS, execution=Execution.MANUAL),
+    "variational": variational_venue,
 }
 
 SIZE = Decimal("0.5")

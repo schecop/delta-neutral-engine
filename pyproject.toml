@@ -5,6 +5,7 @@ description = "Venue-agnostic hedged execution engine for perpetual-futures venu
 authors = [{ name = "Pablo Sala" }]
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "pydantic>=2.10",
     "pyyaml>=6.0",
 ]
@@ -34,5 +35,6 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not live'"
+markers = ["live: calls real venue endpoints; run on purpose with -m live"]
 filterwarnings = ["error"]
