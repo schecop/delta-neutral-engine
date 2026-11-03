@@ -1,37 +1,65 @@
 """Canonical instrument symbols and their venue-native names.
 
-The engine reasons about "XAU-USD"; each venue may call it something else. The registry is the
-single place that knows both, and it refuses ambiguous mappings at load time.
+The engine reasons about "XAU-USD"; each venue may call it something else, and may size its
+contract differently (one venue's unit can be a tenth of the index). The registry is the single
+place that knows both, and it refuses ambiguous mappings at load time.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UnknownInstrumentError(LookupError):
     """An instrument (canonical or venue-native) the registry or a venue doesn't know."""
 
 
+class VenueSymbol(BaseModel):
+    """A venue's listing of a canonical instrument.
+
+    `contract_size` is how many canonical units one venue unit is worth: 0.1 means the venue
+    quotes a tenth of the instrument, so its price is a tenth of the canonical price.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    symbol: str
+    contract_size: Decimal = Field(default=Decimal(1), gt=0)
+
+
 class InstrumentRegistry:
-    def __init__(self, mapping: Mapping[str, Mapping[str, str]]) -> None:
-        """`mapping` is canonical symbol -> {venue name: venue-native symbol}."""
-        self._to_venue: dict[str, dict[str, str]] = {c: dict(v) for c, v in mapping.items()}
+    def __init__(self, mapping: Mapping[str, Mapping[str, str | VenueSymbol]]) -> None:
+        """`mapping` is canonical symbol -> {venue name: venue symbol, or symbol + scale}."""
+        self._to_venue: dict[str, dict[str, VenueSymbol]] = {
+            c: {v: s if isinstance(s, VenueSymbol) else VenueSymbol(symbol=s) for v, s in m.items()}
+            for c, m in mapping.items()
+        }
         self._to_canonical: dict[tuple[str, str], str] = {}
         for canonical, venues in self._to_venue.items():
-            for venue, symbol in venues.items():
-                key = (venue, symbol)
+            for venue, listing in venues.items():
+                key = (venue, listing.symbol)
                 if key in self._to_canonical:
                     raise ValueError(
-                        f"{venue}:{symbol} maps to both {self._to_canonical[key]} and {canonical}"
+                        f"{venue}:{listing.symbol} maps to both "
+                        f"{self._to_canonical[key]} and {canonical}"
                     )
                 self._to_canonical[key] = canonical
 
-    def venue_symbol(self, canonical: str, venue: str) -> str:
+    def _listing(self, canonical: str, venue: str) -> VenueSymbol:
         try:
             return self._to_venue[canonical][venue]
         except KeyError:
             raise UnknownInstrumentError(f"{canonical} is not mapped for {venue}") from None
+
+    def venue_symbol(self, canonical: str, venue: str) -> str:
+        return self._listing(canonical, venue).symbol
+
+    def contract_size(self, canonical: str, venue: str) -> Decimal:
+        """Canonical units per venue unit; adapters use it to keep prices and sizes canonical."""
+        return self._listing(canonical, venue).contract_size
 
     def canonical(self, venue: str, venue_symbol: str) -> str:
         try:

@@ -101,3 +101,38 @@ def test_factory_builds_every_configured_venue() -> None:
         "variational": Execution.MANUAL,
         "qfex": Execution.API,
     }
+
+
+def test_contract_size_is_optional_and_defaults_to_one() -> None:
+    data = _example_dict()
+    data["instruments"]["US500-USD"] = {
+        "variational": {"symbol": "US500-PERP", "contract_size": "0.1"},
+        "qfex": "US500-USD",
+    }
+    registry = InstrumentRegistry(AppConfig.model_validate(data).instruments)
+    assert registry.venue_symbol("US500-USD", "variational") == "US500-PERP"
+    assert registry.contract_size("US500-USD", "variational") == Decimal("0.1")
+    assert registry.contract_size("US500-USD", "qfex") == Decimal(1)
+    assert registry.canonical("variational", "US500-PERP") == "US500-USD"
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        {"symbol": "US500-PERP", "contract_size": "0"},
+        {"symbol": "US500-PERP", "contract_size": "-0.1"},
+        {"symbol": "US500-PERP", "contract_sise": "0.1"},  # typo
+    ],
+)
+def test_bad_contract_size_fails_at_load(listing: dict[str, str]) -> None:
+    data = _example_dict()
+    data["instruments"]["US500-USD"] = {"variational": listing}
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_price_divergence_limit_is_a_fraction() -> None:
+    data = _example_dict()
+    data["risk"]["max_price_divergence"] = "1"  # 100%: almost certainly meant 1%
+    with pytest.raises(ValidationError, match="max_price_divergence"):
+        AppConfig.model_validate(data)

@@ -179,3 +179,7 @@ def test_margin_reflects_open_position(trading_venue: TradingVenue) -> None:
     )
     after = asyncio.run(trading_venue.get_margin())
     assert after.used_margin_usd > before.used_margin_usd
+
+
+def test_aclose_releases_the_adapter(venue: VenueAdapter) -> None:
+    asyncio.run(venue.aclose())

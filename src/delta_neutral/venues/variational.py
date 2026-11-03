@@ -64,6 +64,7 @@ class VariationalVenue:
         self.name = name
         self._registry = registry
         self._client = client or httpx.AsyncClient(base_url=BASE_URL, timeout=10.0)
+        self._owns_client = client is None  # an injected client belongs to the caller
         self._cache_seconds = cache_seconds
         self._max_retries = max_retries
         self._sleep = sleep
@@ -108,15 +109,16 @@ class VariationalVenue:
         quotes = listing.get("quotes")
         if not quotes:
             raise VenueUnavailableError(f"{self.name} has no quotes for {instrument}")
-        notional = size * Decimal(listing["mark_price"])
+        scale = self._registry.contract_size(instrument, self.name)
+        notional = size * Decimal(listing["mark_price"]) / scale
         tier = next((key for limit, key in _TIERS if notional <= limit), None)
         if tier is None:
             raise VenueUnavailableError(f"{self.name}: ${notional:.0f} exceeds the quoted depth")
         return Quote(
             venue=self.name,
             instrument=instrument,
-            bid=Decimal(quotes[tier]["bid"]),
-            ask=Decimal(quotes[tier]["ask"]),
+            bid=Decimal(quotes[tier]["bid"]) / scale,  # venue unit -> canonical unit
+            ask=Decimal(quotes[tier]["ask"]) / scale,
             ts=datetime.fromisoformat(quotes["updated_at"]),
             indicative=True,
         )
@@ -136,3 +138,7 @@ class VariationalVenue:
             rate_pct_per_hour=Decimal(funding["next"]["interval_rate"]) * 100 / hours,
             ts=self._clock(),
         )
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()

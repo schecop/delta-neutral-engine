@@ -116,3 +116,14 @@ def test_snapshot_is_cached() -> None:
     asyncio.run(venue.get_quote("XAU-USD", Decimal("0.1")))
     asyncio.run(venue.get_funding("XAU-USD"))
     assert calls == 1
+
+
+def test_scaled_contract_is_quoted_in_canonical_units() -> None:
+    # The recorded US500-PERP is 1/10 of the index (contract_size 0.1 in the test registry)
+    raw = next(m for m in variational_stats()["listings"] if m["ticker"] == "US500-PERP")
+    quote = asyncio.run(variational_venue().get_quote("US500-USD", Decimal("0.1")))
+    assert quote.bid == Decimal(raw["quotes"]["size_1k"]["bid"]) * 10
+    assert quote.ask == Decimal(raw["quotes"]["size_1k"]["ask"]) * 10
+    # 2 index units are ~$15k: the 100k tier, picked from the canonical notional
+    big = asyncio.run(variational_venue().get_quote("US500-USD", Decimal(2)))
+    assert big.bid == Decimal(raw["quotes"]["size_100k"]["bid"]) * 10

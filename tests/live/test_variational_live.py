@@ -14,10 +14,15 @@ pytestmark = pytest.mark.live
 
 
 def test_real_endpoint_parses() -> None:
-    registry = InstrumentRegistry({"XAU-USD": {"variational": "XAU-PERP"}})
-    venue = VariationalVenue(registry)
-    assert asyncio.run(venue.list_instruments()) == ["XAU-USD"]
-    quote = asyncio.run(venue.get_quote("XAU-USD", Decimal("0.1")))
-    assert quote.indicative and Decimal(0) < quote.bid <= quote.ask
-    funding = asyncio.run(venue.get_funding("XAU-USD"))
-    assert abs(funding.rate_pct_per_hour) < 1
+    async def run() -> None:
+        venue = VariationalVenue(InstrumentRegistry({"XAU-USD": {"variational": "XAU-PERP"}}))
+        try:
+            assert await venue.list_instruments() == ["XAU-USD"]
+            quote = await venue.get_quote("XAU-USD", Decimal("0.1"))
+            assert quote.indicative and Decimal(0) < quote.bid <= quote.ask
+            funding = await venue.get_funding("XAU-USD")
+            assert abs(funding.rate_pct_per_hour) < 1
+        finally:
+            await venue.aclose()
+
+    asyncio.run(run())

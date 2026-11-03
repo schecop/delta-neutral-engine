@@ -7,22 +7,23 @@ listings. Re-record them when a venue changes its format.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from delta_neutral.instruments import InstrumentRegistry
+from delta_neutral.instruments import InstrumentRegistry, VenueSymbol
 from delta_neutral.venues.qfex import REST_URL, QfexVenue
 from delta_neutral.venues.variational import BASE_URL, VariationalVenue
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
-VARIATIONAL_SYMBOLS = {
+VARIATIONAL_SYMBOLS: dict[str, str | VenueSymbol] = {
     "BTC-USD": "BTC-PERP",
     "NVDA-USD": "NVDA-PERP",
-    "US500-USD": "US500-PERP",
+    "US500-USD": VenueSymbol(symbol="US500-PERP", contract_size=Decimal("0.1")),  # 1/10 index
     "W-USD": "W-PERP",
     "XAU-USD": "XAU-PERP",
     "XAU-SWAP-USD": "XAU-SWAP",
@@ -82,13 +83,21 @@ class RecordedFeed:
     async def snapshot(self) -> dict[str, Any]:
         return self.snapshot_data
 
+    async def aclose(self) -> None:
+        pass
+
 
 def qfex_venue(
-    symbols: tuple[str, ...] | None = None, snapshot: dict[str, Any] | None = None
+    symbols: tuple[str, ...] | None = None,
+    snapshot: dict[str, Any] | None = None,
+    overrides: Mapping[str, str | VenueSymbol] | None = None,
 ) -> QfexVenue:
     """A QFEX adapter on recorded refdata and a recorded (or edited) market_stats snapshot."""
     refdata = _fixture("qfex", "refdata.json")
-    mapping = {c: s for c, s in QFEX_SYMBOLS.items() if symbols is None or c in symbols}
+    mapping: dict[str, str | VenueSymbol] = {
+        c: s for c, s in QFEX_SYMBOLS.items() if symbols is None or c in symbols
+    }
+    mapping.update(overrides or {})
     registry = InstrumentRegistry({c: {"qfex": s} for c, s in mapping.items()})
     client = httpx.AsyncClient(
         base_url=REST_URL,

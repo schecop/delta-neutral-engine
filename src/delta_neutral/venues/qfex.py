@@ -48,6 +48,8 @@ class MarketStatsFeed(Protocol):
         """The latest `market_stats` message; raises `VenueUnavailableError` if there is none."""
         ...
 
+    async def aclose(self) -> None: ...
+
 
 class WebSocketFeed:
     """Keeps one subscription alive in the background and serves its latest snapshot."""
@@ -147,6 +149,8 @@ class QfexVenue:
     ) -> None:
         self.name = name
         self._registry = registry
+        # Injected client and feed belong to the caller; the ones made here are ours to close
+        self._owns_client, self._owns_feed = client is None, feed is None
         self._client = client or httpx.AsyncClient(base_url=REST_URL, timeout=10.0)
         self._feed = feed or WebSocketFeed()
         self._refdata_seconds = refdata_seconds
@@ -183,13 +187,14 @@ class QfexVenue:
         if not bbo or not bbo["bid"] or not bbo["ask"]:
             raise VenueUnavailableError(f"{self.name} has no BBO for {instrument}")
         (bid, bid_qty), (ask, ask_qty) = bbo["bid"][0], bbo["ask"][0]
+        scale = self._registry.contract_size(instrument, self.name)
         return Quote(
             venue=self.name,
             instrument=instrument,
-            bid=Decimal(bid),
-            ask=Decimal(ask),
+            bid=Decimal(bid) / scale,  # venue unit -> canonical unit
+            ask=Decimal(ask) / scale,
             ts=datetime.fromisoformat(bbo["time"]),
-            indicative=size > min(Decimal(bid_qty), Decimal(ask_qty)),
+            indicative=size / scale > min(Decimal(bid_qty), Decimal(ask_qty)),
         )
 
     async def get_funding(self, instrument: str) -> FundingRate:
@@ -203,3 +208,9 @@ class QfexVenue:
             rate_pct_per_hour=Decimal(entry["funding_rate"]) * 100,  # hourly fraction -> %/h
             ts=datetime.fromisoformat(entry["time"]),
         )
+
+    async def aclose(self) -> None:
+        if self._owns_feed:
+            await self._feed.aclose()
+        if self._owns_client:
+            await self._client.aclose()

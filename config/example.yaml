@@ -15,7 +15,11 @@ venues:
     execution: api
     max_leverage: "5"
 
-# canonical symbol -> {venue: venue-native symbol}
+# canonical symbol -> {venue: venue-native symbol}. When a venue's contract is a fraction of the
+# instrument (its price is a tenth of the others'), give its contract_size instead:
+#   US500-USD:
+#     venue_a: {symbol: US500-PERP, contract_size: "0.1"}
+#     venue_b: US500-USD
 instruments:
   XAU-USD:
     variational: XAU-PERP
@@ -26,6 +30,7 @@ risk:
   min_free_margin: "0.40"              # keep at least this fraction of free margin per venue
   rebalance_below_free_margin: "0.25"  # rebalance when a venue drops below this
   max_unhedged_seconds: 60
+  max_price_divergence: "0.01"         # alert when venues' mids differ by more than 1%
   min_hold_minutes: 30
   max_hold_minutes: 120
   weekend:

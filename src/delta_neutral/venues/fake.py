@@ -140,6 +140,9 @@ class FakeVenue:
             ts=self._clock(),
         )
 
+    async def aclose(self) -> None:
+        pass  # nothing to release
+
     async def get_positions(self) -> list[Position]:
         now = self._clock()
         return [

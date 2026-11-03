@@ -13,6 +13,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from delta_neutral.instruments import VenueSymbol
 from delta_neutral.models import Execution
 
 
@@ -38,6 +39,9 @@ class RiskConfig(_Strict):
     min_free_margin: Decimal = Field(ge=0, le=1)
     rebalance_below_free_margin: Decimal = Field(ge=0, le=1)
     max_unhedged_seconds: int = Field(gt=0)
+    # Alert when venues' mids for one instrument differ by more than this fraction. Alert only:
+    # the usual cause is a missing contract_size, which skews price comparison, not hedge size.
+    max_price_divergence: Decimal = Field(gt=0, lt=1)
     min_hold_minutes: int = Field(ge=0)
     max_hold_minutes: int = Field(gt=0)
     weekend: WeekendConfig
@@ -69,7 +73,7 @@ class AlertsConfig(_Strict):
 class AppConfig(_Strict):
     mode: Literal["dry_run", "live"]
     venues: dict[str, VenueConfig]
-    instruments: dict[str, dict[str, str]]
+    instruments: dict[str, dict[str, str | VenueSymbol]]
     risk: RiskConfig
     sizing: SizingConfig
     llm: dict[str, ModelChoice]

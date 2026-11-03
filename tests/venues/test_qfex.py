@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
-from delta_neutral.instruments import UnknownInstrumentError
+from delta_neutral.instruments import UnknownInstrumentError, VenueSymbol
 from delta_neutral.models import Execution
 from delta_neutral.venues.base import NotTradableError, VenueUnavailableError, as_trading
 from delta_neutral.venues.qfex import WebSocketFeed
@@ -151,3 +151,13 @@ def test_aclose_waits_for_the_connection_to_close() -> None:
 
 async def _silent_handler(ws: ServerConnection) -> None:
     await ws.wait_closed()
+
+
+def test_scaled_contract_is_quoted_in_canonical_units() -> None:
+    # Pretend GOLD-USD were a tenth of an ounce: prices x10, sizes compared in venue units
+    scaled = {"XAU-USD": VenueSymbol(symbol="GOLD-USD", contract_size=Decimal("0.1"))}
+    venue = qfex_venue(overrides=scaled)
+    quote = asyncio.run(venue.get_quote("XAU-USD", Decimal("0.005")))  # 0.05 venue units
+    assert (quote.bid, quote.ask) == (Decimal(39285), Decimal(39289))
+    assert not quote.indicative  # 0.05 fits the 0.0763 on the ask
+    assert asyncio.run(venue.get_quote("XAU-USD", Decimal("0.01"))).indicative  # 0.1 does not

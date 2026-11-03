@@ -19,6 +19,7 @@ Contract (enforced by tests/conformance/):
 - A `reduce_only` order that would open or increase a position is rejected.
 - Funding is normalised to % per hour, positive meaning longs pay shorts.
 - All timestamps are timezone-aware UTC.
+- `aclose` releases every connection the adapter opened, and returns only once they are closed.
 """
 
 from __future__ import annotations
@@ -62,6 +63,10 @@ class VenueAdapter(Protocol):
         ...
 
     async def get_funding(self, instrument: str) -> FundingRate: ...
+
+    async def aclose(self) -> None:
+        """Release connections; the adapter is unusable afterwards."""
+        ...
 
 
 @runtime_checkable
