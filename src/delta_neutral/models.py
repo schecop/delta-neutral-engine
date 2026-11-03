@@ -21,6 +21,13 @@ class Side(StrEnum):
         return Side.SHORT if self is Side.LONG else Side.LONG
 
 
+class Execution(StrEnum):
+    """How orders reach a venue (ADR-0001). The core reads this; it never reads a venue's name."""
+
+    API = "api"  # the adapter places orders itself
+    MANUAL = "manual"  # the operator places orders by hand; the adapter is read-only
+
+
 class _Frozen(BaseModel):
     """Immutable: a quote or a fill is a fact about the past, never edited in place."""
 

@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from delta_neutral.instruments import UnknownInstrumentError
 from delta_neutral.models import (
+    Execution,
     FundingRate,
     MarginState,
     OrderRequest,
@@ -40,8 +41,12 @@ class FakeVenue:
         equity_usd: Decimal = Decimal(2000),
         leverage: Decimal = Decimal(3),
         clock: Callable[[], datetime] = _utc_now,
+        execution: Execution = Execution.API,
     ) -> None:
         self.name = name
+        # In MANUAL mode the trading methods stay on the class, so `as_trading` must refuse it
+        # by the declared capability alone: that is what the conformance suite checks.
+        self.execution = execution
         self._mids = dict(mids)
         self._half_spread = spread_bps / 2 / 10_000
         self._funding = funding_pct_per_hour

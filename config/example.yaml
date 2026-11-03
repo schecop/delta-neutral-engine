@@ -7,10 +7,12 @@ venues:
   variational:
     enabled: true
     adapter: variational
+    execution: manual      # api | manual (ADR-0001): no trading API, the operator places orders
     max_leverage: "5"      # engine-side cap; must be <= what the venue allows
   qfex:
     enabled: true
     adapter: qfex
+    execution: api
     max_leverage: "5"
 
 # canonical symbol -> {venue: venue-native symbol}

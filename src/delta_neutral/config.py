@@ -13,6 +13,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from delta_neutral.models import Execution
+
 
 class _Strict(BaseModel):
     # A typo in the YAML is an error, not a silent default
@@ -22,6 +24,7 @@ class _Strict(BaseModel):
 class VenueConfig(_Strict):
     enabled: bool = True
     adapter: str
+    execution: Execution  # required: a forgotten line must not silently mean "api"
     max_leverage: Decimal = Field(gt=0)
 
 

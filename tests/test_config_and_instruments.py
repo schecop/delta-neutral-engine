@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from delta_neutral.config import AppConfig, load_config
 from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
+from delta_neutral.models import Execution
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "example.yaml"
 
@@ -62,3 +63,16 @@ def test_registry_round_trip_and_common_pairs() -> None:
 def test_registry_rejects_ambiguous_mapping() -> None:
     with pytest.raises(ValueError, match="maps to both"):
         InstrumentRegistry({"XAU-USD": {"a": "GOLD"}, "XAG-USD": {"a": "GOLD"}})
+
+
+def test_venue_execution_is_required() -> None:
+    data = _example_dict()
+    del data["venues"]["qfex"]["execution"]
+    with pytest.raises(ValidationError, match="execution"):
+        AppConfig.model_validate(data)
+
+
+def test_example_declares_execution_per_venue() -> None:
+    config = load_config(EXAMPLE)
+    assert config.venues["variational"].execution is Execution.MANUAL
+    assert config.venues["qfex"].execution is Execution.API
