@@ -87,7 +87,17 @@ def test_factory_rejects_execution_mismatch() -> None:
 
 
 def test_factory_requires_every_adapter_unless_told() -> None:
-    config = load_config(EXAMPLE)
-    with pytest.raises(AdapterNotAvailableError, match="qfex"):
+    data = _example_dict()
+    data["venues"]["qfex"]["adapter"] = "not-written-yet"
+    config = AppConfig.model_validate(data)
+    with pytest.raises(AdapterNotAvailableError, match="not-written-yet"):
         build_venues(config)
     assert list(build_venues(config, skip_missing=True)) == ["variational"]
+
+
+def test_factory_builds_every_configured_venue() -> None:
+    venues = build_venues(load_config(EXAMPLE))
+    assert {n: v.execution for n, v in venues.items()} == {
+        "variational": Execution.MANUAL,
+        "qfex": Execution.API,
+    }

@@ -12,10 +12,12 @@ from collections.abc import Callable
 from delta_neutral.config import AppConfig
 from delta_neutral.instruments import InstrumentRegistry
 from delta_neutral.venues.base import VenueAdapter
+from delta_neutral.venues.qfex import QfexVenue
 from delta_neutral.venues.variational import VariationalVenue
 
 _BUILDERS: dict[str, Callable[[str, InstrumentRegistry], VenueAdapter]] = {
     "variational": lambda name, registry: VariationalVenue(registry, name=name),
+    "qfex": lambda name, registry: QfexVenue(registry, name=name),
 }
 
 

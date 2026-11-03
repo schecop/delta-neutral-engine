@@ -26,6 +26,7 @@ import httpx
 
 from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
 from delta_neutral.models import Execution, FundingRate, Quote
+from delta_neutral.venues.base import VenueUnavailableError
 
 BASE_URL = "https://omni-client-api.prod.ap-northeast-1.variational.io"  # D1 V1, docs api page
 STATS_PATH = "/metadata/v2/stats"
@@ -36,10 +37,6 @@ _TIERS = (
     (Decimal(100_000), "size_100k"),
     (Decimal(1_000_000), "size_1m"),
 )
-
-
-class VenueUnavailableError(RuntimeError):
-    """The venue could not answer (rate limited past our retries, or no data for a listing)."""
 
 
 class UnsupportedContractError(ValueError):

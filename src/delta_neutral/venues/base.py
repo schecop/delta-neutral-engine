@@ -11,7 +11,8 @@ Two levels, chosen by the venue's execution capability (ADR-0001):
 Contract (enforced by tests/conformance/):
 - `execution` matches what the adapter can do: an API venue implements `TradingVenue`.
 - Symbols in and out are canonical; translation to venue-native names happens inside the adapter.
-- `get_quote` / `get_funding` raise `UnknownInstrumentError` for instruments the venue doesn't list.
+- `get_quote` / `get_funding` raise `UnknownInstrumentError` for instruments the venue doesn't list,
+  and `VenueUnavailableError` when it lists them but cannot price them right now.
 - `place_order` never raises for a business rejection: it returns `OrderStatus.REJECTED` with a
   reason. It raises only for transport failures (timeouts, connection errors), which the executor
   must treat as "state unknown" and reconcile through `get_positions`.
@@ -34,6 +35,13 @@ from delta_neutral.models import (
     Position,
     Quote,
 )
+
+
+class VenueUnavailableError(RuntimeError):
+    """The venue could not answer now: rate limited, stale feed, or no data for a listing.
+
+    Transient by nature: callers skip this snapshot or cycle rather than act on missing data.
+    """
 
 
 class NotTradableError(TypeError):

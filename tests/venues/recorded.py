@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from delta_neutral.instruments import InstrumentRegistry
+from delta_neutral.venues.qfex import REST_URL, QfexVenue
 from delta_neutral.venues.variational import BASE_URL, VariationalVenue
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -52,3 +53,45 @@ def variational_venue(
     registry = InstrumentRegistry({c: {"variational": s} for c, s in VARIATIONAL_SYMBOLS.items()})
     client = httpx.AsyncClient(base_url=BASE_URL, transport=httpx.MockTransport(handler))
     return VariationalVenue(registry, client=client, **kwargs)
+
+
+QFEX_SYMBOLS = {
+    "XAU-USD": "GOLD-USD",
+    "NVDA-USD": "NVDA-USD",
+    "US500-USD": "US500-USD",
+    "ABNB-USD": "ABNB-USD",  # INACTIVE in refdata, empty BBO in the recording
+    "EUR-USD": "EUR-USD",  # DELISTED in refdata, no BBO and no funding in the recording
+    "KIA-KRW": "KIA-KRW",  # INACTIVE in refdata
+}
+QFEX_QUOTABLE = ("XAU-USD", "NVDA-USD", "US500-USD")
+
+
+def _fixture(*parts: str) -> Any:
+    return json.loads(FIXTURES.joinpath(*parts).read_text(encoding="utf-8"))
+
+
+def qfex_market_stats() -> dict[str, Any]:
+    data: dict[str, Any] = _fixture("qfex", "market_stats.json")
+    return data
+
+
+class RecordedFeed:
+    def __init__(self, snapshot: dict[str, Any]) -> None:
+        self.snapshot_data = snapshot
+
+    async def snapshot(self) -> dict[str, Any]:
+        return self.snapshot_data
+
+
+def qfex_venue(
+    symbols: tuple[str, ...] | None = None, snapshot: dict[str, Any] | None = None
+) -> QfexVenue:
+    """A QFEX adapter on recorded refdata and a recorded (or edited) market_stats snapshot."""
+    refdata = _fixture("qfex", "refdata.json")
+    mapping = {c: s for c, s in QFEX_SYMBOLS.items() if symbols is None or c in symbols}
+    registry = InstrumentRegistry({c: {"qfex": s} for c, s in mapping.items()})
+    client = httpx.AsyncClient(
+        base_url=REST_URL,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=refdata)),
+    )
+    return QfexVenue(registry, client=client, feed=RecordedFeed(snapshot or qfex_market_stats()))

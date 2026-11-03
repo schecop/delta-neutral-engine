@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -21,7 +22,7 @@ from delta_neutral.instruments import UnknownInstrumentError
 from delta_neutral.models import Execution, OrderRequest, OrderStatus, Side
 from delta_neutral.venues.base import NotTradableError, TradingVenue, VenueAdapter, as_trading
 from delta_neutral.venues.fake import FakeVenue
-from tests.venues.recorded import variational_venue
+from tests.venues.recorded import QFEX_QUOTABLE, qfex_venue, variational_venue
 
 _FAKE_MIDS = {"XAU-USD": Decimal(2400), "EUR-USD": Decimal("1.08")}
 
@@ -29,7 +30,13 @@ ADAPTER_FACTORIES: dict[str, Callable[[], VenueAdapter]] = {
     "fake-api": lambda: FakeVenue("fake-api", _FAKE_MIDS),
     "fake-manual": lambda: FakeVenue("fake-manual", _FAKE_MIDS, execution=Execution.MANUAL),
     "variational": variational_venue,
+    "qfex": lambda: qfex_venue(QFEX_QUOTABLE),
 }
+
+# API venues whose order entry is not built yet. Their trading tests are strict xfails: the
+# suite shows them as pending, and the day trading lands they pass, fail as XPASS, and force
+# their removal from here. A venue listed here cannot trade: `as_trading` refuses it.
+PENDING_TRADING = {"qfex": "order entry lands in D4"}
 
 SIZE = Decimal("0.5")
 
@@ -44,7 +51,25 @@ def venue(request: pytest.FixtureRequest) -> VenueAdapter:
     return factory()
 
 
-@pytest.fixture(params=_ids_with(Execution.API))
+def _api_params() -> list[Any]:
+    return [
+        pytest.param(
+            key,
+            id=key,
+            marks=[pytest.mark.xfail(strict=True, reason=PENDING_TRADING[key])]
+            if key in PENDING_TRADING
+            else [],
+        )
+        for key in _ids_with(Execution.API)
+    ]
+
+
+@pytest.fixture(params=_api_params())
+def api_venue(request: pytest.FixtureRequest) -> VenueAdapter:
+    return ADAPTER_FACTORIES[request.param]()
+
+
+@pytest.fixture(params=_api_params())
 def trading_venue(request: pytest.FixtureRequest) -> TradingVenue:
     return as_trading(ADAPTER_FACTORIES[request.param]())
 
@@ -74,8 +99,10 @@ def _order(
 def test_declares_execution(venue: VenueAdapter) -> None:
     assert isinstance(venue, VenueAdapter)
     assert venue.execution in set(Execution)
-    if venue.execution is Execution.API:
-        assert isinstance(venue, TradingVenue)
+
+
+def test_api_venue_can_trade(api_venue: VenueAdapter) -> None:
+    assert isinstance(api_venue, TradingVenue)
 
 
 def test_manual_venue_refuses_orders(manual_venue: VenueAdapter) -> None:

@@ -9,8 +9,8 @@ import pytest
 
 from delta_neutral.instruments import UnknownInstrumentError
 from delta_neutral.models import Execution
-from delta_neutral.venues.base import NotTradableError, as_trading
-from delta_neutral.venues.variational import UnsupportedContractError, VenueUnavailableError
+from delta_neutral.venues.base import NotTradableError, VenueUnavailableError, as_trading
+from delta_neutral.venues.variational import UnsupportedContractError
 from tests.venues.recorded import variational_stats, variational_venue
 
 

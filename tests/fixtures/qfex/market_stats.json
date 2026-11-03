@@ -1,0 +1,178 @@
+{
+ "sequence": 1,
+ "type": "market_stats",
+ "time": "2026-11-03T19:50:50.415984934Z",
+ "symbol": "*",
+ "bbos": [
+  {
+   "time": "2026-11-03T19:50:50.036984972Z",
+   "symbol": "ABNB-USD",
+   "bid": [],
+   "ask": []
+  },
+  {
+   "time": "2026-11-03T19:50:50.037314977Z",
+   "symbol": "GOLD-USD",
+   "bid": [
+    [
+     "3928.5",
+     "39.8386"
+    ]
+   ],
+   "ask": [
+    [
+     "3928.9",
+     "0.0763"
+    ]
+   ]
+  },
+  {
+   "time": "2026-11-03T19:50:50.036532733Z",
+   "symbol": "KIA-KRW",
+   "bid": [],
+   "ask": []
+  },
+  {
+   "time": "2026-11-03T19:50:50.036108554Z",
+   "symbol": "NVDA-USD",
+   "bid": [
+    [
+     "206.92",
+     "1.957"
+    ]
+   ],
+   "ask": [
+    [
+     "206.95",
+     "1.957"
+    ]
+   ]
+  },
+  {
+   "time": "2026-11-03T19:50:50.035727730Z",
+   "symbol": "US500-USD",
+   "bid": [
+    [
+     "7568.1",
+     "0.928"
+    ]
+   ],
+   "ask": [
+    [
+     "7568.2",
+     "0.663"
+    ]
+   ]
+  }
+ ],
+ "mark_prices": [
+  {
+   "time": "2026-11-03T19:50:50.063079566Z",
+   "symbol": "ABNB-USD",
+   "price": "167.885"
+  },
+  {
+   "time": "2026-11-03T19:50:50.063079566Z",
+   "symbol": "EUR-USD",
+   "price": "1.14059"
+  },
+  {
+   "time": "2026-11-03T19:50:50.063079566Z",
+   "symbol": "GOLD-USD",
+   "price": "3928.5"
+  },
+  {
+   "time": "2026-11-03T19:50:50.063079566Z",
+   "symbol": "KIA-KRW",
+   "price": "96550"
+  },
+  {
+   "time": "2026-11-03T19:50:50.063079566Z",
+   "symbol": "NVDA-USD",
+   "price": "206.91"
+  },
+  {
+   "time": "2026-11-03T19:50:50.063079566Z",
+   "symbol": "US500-USD",
+   "price": "7568.2"
+  }
+ ],
+ "open_interests": [
+  {
+   "time": "2026-11-03T19:49:21.003003369Z",
+   "symbol": "EUR-USD",
+   "open_interest": "0"
+  },
+  {
+   "time": "2026-11-03T19:49:21.003003369Z",
+   "symbol": "GOLD-USD",
+   "open_interest": "1582.4818"
+  },
+  {
+   "time": "2026-11-03T19:49:21.003003369Z",
+   "symbol": "KIA-KRW",
+   "open_interest": "10.50838"
+  },
+  {
+   "time": "2026-11-03T19:49:21.003003369Z",
+   "symbol": "NVDA-USD",
+   "open_interest": "5001.042"
+  },
+  {
+   "time": "2026-11-03T19:49:21.003003369Z",
+   "symbol": "US500-USD",
+   "open_interest": "918.194"
+  }
+ ],
+ "funding_rates": [
+  {
+   "time": "2026-11-03T19:50:38.551579475Z",
+   "symbol": "GOLD-USD",
+   "funding_rate": "0.00004",
+   "annualised_funding_rate": "0.2202",
+   "time_remaining": 557
+  },
+  {
+   "time": "2026-11-03T19:50:38.554815748Z",
+   "symbol": "NVDA-USD",
+   "funding_rate": "0.00005",
+   "annualised_funding_rate": "0.3184",
+   "time_remaining": 560
+  },
+  {
+   "time": "2026-11-03T19:50:38.547020570Z",
+   "symbol": "US500-USD",
+   "funding_rate": "0.00003",
+   "annualised_funding_rate": "0.1652",
+   "time_remaining": 558
+  }
+ ],
+ "daily_volumes": [
+  {
+   "symbol": "GOLD-USD",
+   "volume": "725.82"
+  },
+  {
+   "symbol": "NVDA-USD",
+   "volume": "6658.886"
+  },
+  {
+   "symbol": "US500-USD",
+   "volume": "1599.132"
+  }
+ ],
+ "daily_volumes_notional": [
+  {
+   "symbol": "GOLD-USD",
+   "volume": "2857843.37572"
+  },
+  {
+   "symbol": "NVDA-USD",
+   "volume": "1376792.17224"
+  },
+  {
+   "symbol": "US500-USD",
+   "volume": "12080503.8921"
+  }
+ ]
+}
