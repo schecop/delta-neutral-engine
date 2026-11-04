@@ -11,6 +11,8 @@ venue instead has to prove the engine cannot place orders through it (ADR-0001).
 from __future__ import annotations
 
 import asyncio
+import importlib
+import os
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
@@ -32,6 +34,11 @@ ADAPTER_FACTORIES: dict[str, Callable[[], VenueAdapter]] = {
     "variational": variational_venue,
     "qfex": lambda: qfex_venue(QFEX_QUOTABLE),
 }
+
+# `module:attribute` of extra factories, used by the suite's own test to add broken adapters
+if _extra := os.environ.get("CONFORMANCE_EXTRA"):
+    _module, _attr = _extra.split(":")
+    ADAPTER_FACTORIES.update(getattr(importlib.import_module(_module), _attr))
 
 # API venues whose order entry is not built yet. Their trading tests are strict xfails: the
 # suite shows them as pending, and the day trading lands they pass, fail as XPASS, and force
