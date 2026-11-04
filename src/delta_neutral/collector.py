@@ -24,7 +24,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS funding (
 CREATE TABLE IF NOT EXISTS events (
     tick_id INTEGER REFERENCES ticks(id),
     at TEXT NOT NULL,
-    kind TEXT NOT NULL,            -- unavailable | unknown_instrument | price_divergence | overrun
+    kind TEXT NOT NULL, -- unavailable | unknown_instrument | price_divergence | late_tick | overrun
     venue TEXT,
     instrument TEXT,
     message TEXT NOT NULL
@@ -109,16 +109,33 @@ async def collect_tick(
     notional_usd: Decimal,
     max_divergence: Decimal,
     clock: Callable[[], datetime] = _utc_now,
+    *,
+    deadline_seconds: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, int]:
-    """One snapshot of every pair on every venue that lists it, written as one transaction."""
-    started, t0 = clock(), time.monotonic()
+    """One snapshot of every pair on every venue that lists it, written as one transaction.
+
+    A snapshot is only worth storing if its quotes are close in time. A tick that runs past
+    `deadline_seconds` (a hung request, or the machine sleeping mid-tick) keeps its `ticks` row
+    and a `late_tick` event, but none of its quotes (FAILURES.md, 2026-11-04).
+    """
+    started, t0 = clock(), monotonic()
     jobs = [
         _snapshot(venues[v], instrument, notional_usd)
         for instrument, names in sorted(pairs.items())
         for v in names
         if v in venues
     ]
-    results = await asyncio.gather(*jobs)
+    try:
+        results: list[Snapshot] | None = await asyncio.wait_for(
+            asyncio.gather(*jobs), deadline_seconds
+        )
+    except TimeoutError:
+        results = None
+    elapsed = monotonic() - t0
+    # Checked on the clock too: after a sleep, the wait and the requests time out together
+    if results is None or (deadline_seconds is not None and elapsed > deadline_seconds):
+        return _late_tick(db, started, elapsed, deadline_seconds or 0.0)
 
     with db:  # one transaction: a tick is stored whole or not at all
         cur = db.execute(
@@ -183,6 +200,24 @@ async def collect_tick(
     return summary
 
 
+def _late_tick(
+    db: sqlite3.Connection, started: datetime, elapsed: float, deadline: float
+) -> dict[str, int]:
+    duration_ms = int(elapsed * 1000)
+    message = f"tick took {elapsed:.1f}s, over its {deadline:.0f}s deadline; quotes discarded"
+    with db:
+        cur = db.execute(
+            "INSERT INTO ticks (started_at, duration_ms, quotes, errors) VALUES (?, ?, 0, 1)",
+            (started.isoformat(), duration_ms),
+        )
+        db.execute(
+            "INSERT INTO events VALUES (?, ?, 'late_tick', NULL, NULL, ?)",
+            (cur.lastrowid, _utc_now().isoformat(), message),
+        )
+    log.warning("late tick: %s", message)
+    return {"tick": cur.lastrowid or 0, "quotes": 0, "errors": 1, "ms": duration_ms}
+
+
 def pairs_from_config(config: AppConfig) -> dict[str, list[str]]:
     """instrument -> the enabled venues that map it."""
     enabled = {n for n, v in config.venues.items() if v.enabled}
@@ -211,6 +246,8 @@ async def run(
                 pairs,
                 config.sizing.notional_per_leg_usd,
                 config.risk.max_price_divergence,
+                deadline_seconds=interval,
+                monotonic=monotonic,
             )
             k += 1
             behind = monotonic() - (start + k * interval)
@@ -231,12 +268,20 @@ async def run(
 
 
 def report(db: sqlite3.Connection, interval_seconds: int) -> str:
-    """Coverage of the collected data: the exit check of slice 2.4 reads this."""
-    rows = db.execute("SELECT started_at FROM ticks ORDER BY id").fetchall()
+    """Coverage of the collected data: the exit check of slice 2.4 reads this.
+
+    A gap is the time between consecutive snapshots, and a snapshot exists when a tick with quotes
+    *ends*. Measuring between tick starts hid a 13h sleep inside one tick (FAILURES.md, 2026-11-04).
+    """
+    rows = db.execute("SELECT started_at, duration_ms, quotes FROM ticks ORDER BY id").fetchall()
     if not rows:
         return "no ticks yet"
     times = [datetime.fromisoformat(r[0]) for r in rows]
-    gaps = [(b - a).total_seconds() for a, b in itertools.pairwise(times)]
+    ends = [t + timedelta(milliseconds=ms) for t, (_, ms, q) in zip(times, rows, strict=True) if q]
+    gaps = [(b - a).total_seconds() for a, b in itertools.pairwise(ends)]
+    if len(ends) < len(rows):  # time after the last snapshot is a gap too
+        last_end = times[-1] + timedelta(milliseconds=rows[-1][1])
+        gaps.append((last_end - (ends[-1] if ends else times[0])).total_seconds())
     max_gap = max(gaps, default=0.0)
     lines = [
         f"ticks {len(times)} from {times[0]:%Y-%m-%d %H:%M:%S} "
