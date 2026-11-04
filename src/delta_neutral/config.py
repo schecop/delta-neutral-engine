@@ -22,11 +22,34 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class FeesConfig(_Strict):
+    """Fees per fill, as a fraction of notional (0.0005 = 5 bps)."""
+
+    taker: Decimal = Field(default=Decimal(0), ge=0, lt=1)
+    by_instrument: dict[str, Decimal] = {}  # canonical symbol -> taker fee, where it differs
+
+    def taker_for(self, instrument: str) -> Decimal:
+        return self.by_instrument.get(instrument, self.taker)
+
+
+class RewardConfig(_Strict):
+    """What a venue pays back for activity, in the objective's own units (linear, per venue)."""
+
+    per_usd_volume: Decimal = Field(default=Decimal(0), ge=0)  # per USD traded (open + close)
+    per_usd_hour: Decimal = Field(default=Decimal(0), ge=0)  # per USD of notional held per hour
+    instrument_multiplier: dict[str, Decimal] = {}  # canonical symbol -> multiplier, default 1
+
+    def multiplier(self, instrument: str) -> Decimal:
+        return self.instrument_multiplier.get(instrument, Decimal(1))
+
+
 class VenueConfig(_Strict):
     enabled: bool = True
     adapter: str
     execution: Execution  # required: a forgotten line must not silently mean "api"
     max_leverage: Decimal = Field(gt=0)
+    fees: FeesConfig = FeesConfig()
+    reward: RewardConfig = RewardConfig()
 
 
 class WeekendConfig(_Strict):
@@ -70,6 +93,10 @@ class AlertsConfig(_Strict):
     telegram_enabled: bool = True
 
 
+class ScoringConfig(_Strict):
+    hold_minutes: int = Field(gt=0)  # the hold each candidate is costed at; within risk limits
+
+
 class CollectorConfig(_Strict):
     interval_seconds: int = Field(ge=5)  # Variational's read API allows 10 req/10s per IP
     db_path: Path
@@ -84,6 +111,7 @@ class AppConfig(_Strict):
     llm: dict[str, ModelChoice]
     alerts: AlertsConfig
     collector: CollectorConfig
+    scoring: ScoringConfig
 
     @model_validator(mode="after")
     def _cross_checks(self) -> AppConfig:
@@ -97,6 +125,12 @@ class AppConfig(_Strict):
             unknown = mapping.keys() - self.venues.keys()
             if unknown:
                 raise ValueError(f"{canonical} maps to unconfigured venues: {sorted(unknown)}")
+        if (
+            not self.risk.min_hold_minutes
+            <= self.scoring.hold_minutes
+            <= self.risk.max_hold_minutes
+        ):
+            raise ValueError("scoring.hold_minutes must be within risk min/max_hold_minutes")
         return self
 
 
