@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +115,20 @@ def test_fill_with_venue_and_local_time(tmp_path: Path) -> None:
     ).fetchone()
     assert row[0] == "1997.5"
     assert datetime.fromisoformat(row[1]) == planned + timedelta(seconds=30)
+
+
+def test_amend_corrects_a_fill_from_the_chat(tmp_path: Path) -> None:
+    bot, messenger, _ = _bot(tmp_path)
+    asyncio.run(bot.handle(_message("/plan XAU-USD")))
+    asyncio.run(bot.handle(_message("/fill 1 variational 1998")))
+    asyncio.run(bot.handle(_message("/amend 1 variational size=0.4 price=1997")))
+    assert messenger.texts()[-1].startswith("amended variational in cycle 1")
+    row = bot.executor._db.execute(
+        "SELECT size, price FROM legs WHERE venue = 'variational' AND phase = 'open'"
+    ).fetchone()
+    assert (Decimal(row[0]), Decimal(row[1])) == (Decimal("0.4"), Decimal(1997))
+    asyncio.run(bot.handle(_message("/amend 1 variational colour=red")))
+    assert messenger.texts()[-1].startswith("error: usage: /amend")
 
 
 def test_a_fill_time_past_now_belongs_to_yesterday() -> None:

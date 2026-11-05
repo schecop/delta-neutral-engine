@@ -31,6 +31,9 @@ venues:
 #   US500-USD:
 #     venue_a: {symbol: US500-PERP, contract_size: "0.1"}
 #     venue_b: US500-USD
+# Optional lot_size (order size step) and min_size, in venue units: the executor rounds both
+# legs down to one size every venue accepts, and refuses a notional below a minimum:
+#     venue_b: {symbol: US500-USD, lot_size: "0.001", min_size: "0.001"}
 instruments:
   XAU-USD:
     variational: XAU-PERP

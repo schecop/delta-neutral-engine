@@ -63,7 +63,8 @@ class RiskConfig(_Strict):
     rebalance_below_free_margin: Decimal = Field(ge=0, le=1)
     max_unhedged_seconds: int = Field(gt=0)
     # Alert when venues' mids for one instrument differ by more than this fraction. Alert only:
-    # the usual cause is a missing contract_size, which skews price comparison, not hedge size.
+    # the usual cause is a missing contract_size. The executor also refuses a cycle whose legs'
+    # own-quote sizes differ by more than this: that would be a hedge of the wrong size.
     max_price_divergence: Decimal = Field(gt=0, lt=1)
     min_hold_minutes: int = Field(ge=0)
     max_hold_minutes: int = Field(gt=0)

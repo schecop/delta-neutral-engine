@@ -19,7 +19,9 @@ A cycle is a state machine stored in SQLite, so it survives a restart at any ste
 In each phase the manual legs go first, because they are the slow and uncertain ones; API legs
 are sent only once every manual leg of the phase is confirmed, which keeps the unhedged time to
 the API leg's latency. Which legs are manual comes from each venue's `execution` capability,
-never from its name (ADR-0001). Each leg is sized in USD from its own venue's quote.
+never from its name (ADR-0001). Each leg is sized in USD from its own venue's quote; legs that
+disagree (a wrong contract_size) refuse the cycle, and agreeing legs share one size rounded down
+to every venue's lot step.
 """
 
 from __future__ import annotations
@@ -180,6 +182,14 @@ class Executor:
             raise CycleError("not opening: " + "; ".join(blocks))
         notional = candidate.notional_usd
         funding = await self._funding_spread(candidate)
+        legs = ((candidate.long_venue, Side.LONG), (candidate.short_venue, Side.SHORT))
+        # each leg sized in USD from its own venue's quote first (D4 rule), then one tradable size
+        raw = {
+            venue: notional
+            / (await quote_for_notional(self._venues[venue], candidate.instrument, notional)).mid
+            for venue, _ in legs
+        }
+        size = self._hedge_size(candidate.instrument, raw)
         with self._db:
             cur = self._db.execute(
                 "INSERT INTO cycles (instrument, long_venue, short_venue, notional_usd, "
@@ -198,15 +208,8 @@ class Executor:
                 ),
             )
             cycle_id = cur.lastrowid or 0
-            for venue, side in (
-                (candidate.long_venue, Side.LONG),
-                (candidate.short_venue, Side.SHORT),
-            ):
-                # each leg sized in USD from its own venue's quote (D4 rule)
-                quote = await quote_for_notional(
-                    self._venues[venue], candidate.instrument, notional
-                )
-                self._insert_leg(cycle_id, "open", venue, side, notional / quote.mid, now)
+            for venue, side in legs:
+                self._insert_leg(cycle_id, "open", venue, side, size, now)
             self._event(cycle_id, "planned", {"candidate": _candidate_json(candidate)})
             self._set_state(cycle_id, CycleState.OPENING)
         return await self._advance(cycle_id)
@@ -258,6 +261,89 @@ class Executor:
         if len(waiting) > 1:
             return []  # other manual legs still wait; they were instructed when the phase began
         return await self._advance(cycle_id)
+
+    def amend_fill(
+        self,
+        cycle_id: int,
+        venue: str,
+        *,
+        venue_size: Decimal | None = None,
+        venue_price: Decimal | None = None,
+        filled_at: datetime | None = None,
+    ) -> None:
+        """Correct a recorded fill from the venue's history (size, price or time), latest phase.
+
+        Everything derived from it follows: the fee, an unfilled close leg's size, the hold's
+        start and end, and a closed cycle's summary. The old values stay in the event log.
+        """
+        cycle = self._cycle(cycle_id)
+        if cycle["state"] == CycleState.ABORTED:
+            raise CycleError(f"cycle {cycle_id} is aborted: nothing to amend")
+        leg = self._db.execute(
+            "SELECT * FROM legs WHERE cycle_id = ? AND venue = ? AND price IS NOT NULL "
+            "ORDER BY phase = 'close' DESC LIMIT 1",
+            (cycle_id, venue),
+        ).fetchone()
+        if leg is None:
+            raise CycleError(f"cycle {cycle_id} has no {venue} fill to amend")
+        if filled_at is not None and filled_at > self._clock() + FILL_TIME_SLACK:
+            raise CycleError(f"fill time {filled_at:%H:%M:%S} UTC is in the future")
+        instrument, phase = cycle["instrument"], leg["phase"]
+        scale = self._registry.contract_size(instrument, venue)
+        size = Decimal(leg["size"]) if venue_size is None else venue_size * scale
+        price = Decimal(leg["price"]) if venue_price is None else venue_price / scale
+        at = datetime.fromisoformat(leg["filled_at"]) if filled_at is None else filled_at
+        fee = self._fee(instrument, venue) * size * price
+        with self._db:
+            self._db.execute(
+                "UPDATE legs SET size = ?, price = ?, fee_usd = ?, filled_at = ? "
+                "WHERE cycle_id = ? AND phase = ? AND venue = ?",
+                (
+                    str(size),
+                    str(price),
+                    str(fee),
+                    at.astimezone(UTC).isoformat(),
+                    cycle_id,
+                    phase,
+                    venue,
+                ),
+            )
+            if phase == "open":  # an unfilled close leg closes what is really held
+                self._db.execute(
+                    "UPDATE legs SET size = ? WHERE cycle_id = ? AND phase = 'close' "
+                    "AND venue = ? AND price IS NULL",
+                    (str(size), cycle_id, venue),
+                )
+            self._event(
+                cycle_id,
+                "leg_amended",
+                {
+                    "phase": phase,
+                    "venue": venue,
+                    "size": str(size),
+                    "price": str(price),
+                    "filled_at": at.isoformat(),
+                    "was": {k: leg[k] for k in ("size", "price", "filled_at")},
+                },
+            )
+            self._refresh_derived(cycle_id)
+
+    def _refresh_derived(self, cycle_id: int) -> None:
+        """Recompute what a completed phase derived from its fills (after an amendment)."""
+        cycle = self._cycle(cycle_id)
+        if cycle["opened_at"] is not None:
+            opened = self._last_fill(cycle_id, "open")
+            due = opened + timedelta(minutes=cycle["hold_minutes"])
+            self._db.execute(
+                "UPDATE cycles SET opened_at = ?, close_due_at = ? WHERE id = ?",
+                (opened.isoformat(), due.isoformat(), cycle_id),
+            )
+        if cycle["state"] == CycleState.CLOSED:
+            summary = self._summary(self._cycle(cycle_id))
+            self._db.execute(
+                "UPDATE cycles SET closed_at = ?, summary = ? WHERE id = ?",
+                (self._last_fill(cycle_id, "close").isoformat(), json.dumps(summary), cycle_id),
+            )
 
     async def request_close(self, cycle_id: int) -> list[ManualInstruction]:
         cycle = self._cycle(cycle_id)
@@ -382,6 +468,39 @@ class Executor:
 
     # -- helpers ------------------------------------------------------------------------------
 
+    def _hedge_size(self, instrument: str, raw: Mapping[str, Decimal]) -> Decimal:
+        """One size for both legs, in canonical units, that every venue accepts as an order.
+
+        The legs' own-quote sizes must agree first: a gap beyond the price-divergence limit is
+        a wrong contract_size (one leg would be 10x the other), so the cycle is refused. Then the
+        smaller is rounded down to the coarsest lot step, and checked against each minimum.
+        """
+        low, high = min(raw.values()), max(raw.values())
+        if (high - low) / low > self._config.risk.max_price_divergence:
+            detail = ", ".join(f"{v} {s:.6f}" for v, s in raw.items())
+            raise CycleError(f"leg sizes disagree ({detail}): check contract_size")
+        steps = []
+        for venue in raw:
+            lot, _ = self._registry.size_rules(instrument, venue)
+            if lot is not None:
+                steps.append(lot * self._registry.contract_size(instrument, venue))
+        size = low
+        if steps:
+            step = max(steps)
+            if any(step % s for s in steps):
+                raise CycleError(f"{instrument}: the venues' lot sizes do not nest ({steps})")
+            size = (low // step) * step
+        for venue in raw:
+            _, minimum = self._registry.size_rules(instrument, venue)
+            venue_size = size / self._registry.contract_size(instrument, venue)
+            if venue_size <= 0 or (minimum is not None and venue_size < minimum):
+                symbol = self._registry.venue_symbol(instrument, venue)
+                raise CycleError(
+                    f"{venue} needs at least {minimum} {symbol}; "
+                    f"the notional buys {venue_size}: raise the notional"
+                )
+        return size
+
     async def _funding_spread(self, c: Candidate) -> Decimal:
         long, short = await asyncio.gather(
             self._venues[c.long_venue].get_funding(c.instrument),
@@ -405,7 +524,7 @@ class Executor:
             action="BUY" if buys else "SELL",
             venue_size=size / scale,  # canonical units -> venue units
             venue_price=(quote.ask if buys else quote.bid) * scale,
-            notional_usd=Decimal(cycle["notional_usd"]),
+            notional_usd=size * quote.mid,  # after rounding to the lot size, not the configured
         )
         with self._db:
             self._event(cycle["id"], "manual_instruction", {"message": instruction.message()})

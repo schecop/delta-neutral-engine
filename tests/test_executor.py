@@ -153,6 +153,46 @@ def test_a_full_dry_run_cycle_matches_the_hand_computation(tmp_path: Path) -> No
     assert kinds[:2] == ["planned", "opening"] and kinds[-1] == "closed"
 
 
+def _closed_cycle(tmp_path: Path, clock: Clock) -> Executor:
+    """The hand-computed cycle above, run to the end: realised cost 4."""
+    config, venues, db = _setup(tmp_path, clock)
+    executor = Executor(config, venues, db, clock=clock)
+    asyncio.run(executor.plan(_candidate(config, venues, "XAU-USD")))
+    asyncio.run(executor.confirm_manual(1, Decimal(1998)))
+    clock.advance(30 * 60 + 10)
+    asyncio.run(executor.close_due())
+    asyncio.run(executor.confirm_manual(1, Decimal(2002)))
+    return executor
+
+
+def test_amending_a_closed_cycles_fill_recomputes_its_summary(tmp_path: Path) -> None:
+    clock = Clock()
+    executor = _closed_cycle(tmp_path, clock)
+    # the short closed at 2001, not 2002: 0.5 * 1 less lost on price
+    executor.amend_fill(1, "variational", venue_price=Decimal(2001))
+    summary = json.loads(executor._db.execute("SELECT summary FROM cycles").fetchone()[0])
+    assert Decimal(summary["realised_cost_usd"]) == Decimal("3.5")
+    (was,) = executor._db.execute(
+        "SELECT data FROM cycle_events WHERE kind = 'leg_amended'"
+    ).fetchone()
+    assert json.loads(was)["was"]["price"] == "2002"  # the old value stays in the log
+
+
+def test_amending_an_open_legs_size_resizes_its_close(tmp_path: Path) -> None:
+    clock = Clock()
+    executor = _both_manual(tmp_path, clock)
+    asyncio.run(executor.plan(_candidate(executor._config, executor._venues, "XAU-USD")))
+    asyncio.run(executor.confirm_manual(1, Decimal(1998), venue="variational"))
+    asyncio.run(executor.confirm_manual(1, Decimal(2001), venue="qfex"))
+    for venue in ("variational", "qfex"):  # the venues only took 0.4
+        executor.amend_fill(1, venue, venue_size=Decimal("0.4"))
+    closes = asyncio.run(executor.request_close(1))
+    assert {i.venue: i.venue_size for i in closes} == {
+        "variational": Decimal("0.4"),
+        "qfex": Decimal("0.4"),
+    }
+
+
 def test_a_restart_mid_cycle_continues_from_the_database(tmp_path: Path) -> None:
     clock = Clock()
     config, venues, db = _setup(tmp_path, clock)
@@ -241,6 +281,58 @@ def test_a_reported_fill_time_outside_the_legs_window_is_refused(tmp_path: Path)
     for wrong in (T0 - timedelta(hours=1), T0 + timedelta(hours=1)):  # a typo in the hour
         with pytest.raises(CycleError, match="outside the leg's window"):
             asyncio.run(executor.confirm_manual(1, Decimal(1998), venue="qfex", filled_at=wrong))
+
+
+def _with_instruments(tmp_path: Path, clock: Clock, instruments: dict[str, Any]) -> Executor:
+    config, venues, db = _setup(tmp_path, clock)
+    data = config.model_dump(mode="json")
+    data["instruments"] = {**data["instruments"], **instruments}
+    return Executor(AppConfig.model_validate(data), venues, db, clock=clock)
+
+
+def test_both_legs_get_one_size_rounded_to_the_coarsest_lot(tmp_path: Path) -> None:
+    clock = Clock()
+    # $1000 at 2000 is 0.5. US500 on variational is a tenth, so its lot of 0.7 is 0.07 canonical,
+    # coarser than qfex's 0.01 (and a multiple of it): 0.5 // 0.07 = 7 lots = 0.49 on both legs
+    executor = _with_instruments(
+        tmp_path,
+        clock,
+        {
+            "US500-USD": {
+                "variational": {"symbol": "US500-PERP", "contract_size": "0.1", "lot_size": "0.7"},
+                "qfex": {"symbol": "US500-USD", "lot_size": "0.01"},
+            }
+        },
+    )
+    (instruction,) = asyncio.run(
+        executor.plan(_candidate(executor._config, executor._venues, "US500-USD"))
+    )
+    sizes = {r["venue"]: Decimal(r["size"]) for r in executor._db.execute("SELECT * FROM legs")}
+    assert sizes == {"variational": Decimal("0.49"), "qfex": Decimal("0.49")}
+    assert instruction.venue_size == Decimal("4.9")  # variational units: 7 lots of 0.7
+
+
+def test_legs_that_disagree_on_size_refuse_the_cycle(tmp_path: Path) -> None:
+    clock = Clock()
+    config, venues, db = _setup(tmp_path, clock)
+    executor = Executor(config, venues, db, clock=clock)
+    with pytest.raises(CycleError, match="check contract_size"):
+        executor._hedge_size("XAU-USD", {"variational": Decimal(5), "qfex": Decimal("0.5")})
+    assert executor._hedge_size(
+        "XAU-USD", {"variational": Decimal("0.5"), "qfex": Decimal("0.501")}
+    ) == Decimal("0.5")  # the gap between venues is not an error: the smaller wins
+
+
+def test_a_notional_below_a_venues_minimum_refuses_the_cycle(tmp_path: Path) -> None:
+    clock = Clock()
+    executor = _with_instruments(
+        tmp_path,
+        clock,
+        {"XAU-USD": {"variational": "XAU-PERP", "qfex": {"symbol": "GOLD-USD", "min_size": "1"}}},
+    )
+    with pytest.raises(CycleError, match="qfex needs at least 1 GOLD-USD"):
+        asyncio.run(executor.plan(_candidate(executor._config, executor._venues, "XAU-USD")))
+    assert executor._db.execute("SELECT COUNT(*) FROM cycles").fetchone()[0] == 0
 
 
 def test_live_mode_is_refused(tmp_path: Path) -> None:

@@ -22,12 +22,15 @@ class VenueSymbol(BaseModel):
 
     `contract_size` is how many canonical units one venue unit is worth: 0.1 means the venue
     quotes a tenth of the instrument, so its price is a tenth of the canonical price.
+    `lot_size` (order size step) and `min_size` are in venue units, as the venue's app shows them.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     symbol: str
     contract_size: Decimal = Field(default=Decimal(1), gt=0)
+    lot_size: Decimal | None = Field(default=None, gt=0)
+    min_size: Decimal | None = Field(default=None, gt=0)
 
 
 class InstrumentRegistry:
@@ -60,6 +63,11 @@ class InstrumentRegistry:
     def contract_size(self, canonical: str, venue: str) -> Decimal:
         """Canonical units per venue unit; adapters use it to keep prices and sizes canonical."""
         return self._listing(canonical, venue).contract_size
+
+    def size_rules(self, canonical: str, venue: str) -> tuple[Decimal | None, Decimal | None]:
+        """(order size step, minimum order size) in venue units; None where not configured."""
+        listing = self._listing(canonical, venue)
+        return listing.lot_size, listing.min_size
 
     def canonical(self, venue: str, venue_symbol: str) -> str:
         try:

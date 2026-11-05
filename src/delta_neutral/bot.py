@@ -12,9 +12,9 @@ milliseconds, not after a fresh WebSocket handshake):
   each new risk event as an alert.
 
 Commands: /score [INSTRUMENT], /plan [INSTRUMENT], /fill CYCLE [VENUE] PRICE [HH:MM:SS] [SIZE],
-/close CYCLE, /abort CYCLE, /status, /events. A manual instruction comes with buttons:
-"<venue> filled at ~P" confirms that leg at the quoted price, now; another price or an earlier
-fill time goes through /fill.
+/amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS], /close CYCLE, /abort CYCLE, /status,
+/events. A manual instruction comes with buttons: "<venue> filled at ~P" confirms that leg at
+the quoted price, now; another price or an earlier fill time goes through /fill.
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ HELP = (
     "/plan [INSTRUMENT] - score now and open the best cycle\n"
     "/fill CYCLE [VENUE] PRICE [HH:MM:SS] [SIZE] - confirm a manual leg: the venue's fill\n"
     "  price, and its fill time (your local time) if you report after the fact\n"
+    "/amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS] - correct a recorded fill\n"
     "/close CYCLE - close before the hold ends\n"
     "/abort CYCLE - cancel a cycle before any fill\n"
     "/status - recent cycles\n"
@@ -173,6 +174,8 @@ class EngineBot:
                 await self._say(status_text(self._db).splitlines()[0])
             case "/fill":
                 await self._fill(args)
+            case "/amend":
+                await self._amend(args)
             case "/close":
                 await self._instruct(await self.executor.request_close(int(args[0])))
             case "/abort":
@@ -202,6 +205,21 @@ class EngineBot:
             )
         )
         await self._say(self._cycle_line(int(cycle)))
+
+    async def _amend(self, args: list[str]) -> None:
+        """/amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS]: correct the venue's latest fill."""
+        cycle, venue, *pairs = args
+        fields = dict(p.split("=", 1) for p in pairs)
+        if not fields or fields.keys() - {"size", "price", "at"}:
+            raise ValueError("usage: /amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS]")
+        self.executor.amend_fill(
+            int(cycle),
+            venue,
+            venue_size=Decimal(fields["size"]) if "size" in fields else None,
+            venue_price=Decimal(fields["price"]) if "price" in fields else None,
+            filled_at=parse_fill_time(fields["at"], self._clock()) if "at" in fields else None,
+        )
+        await self._say(f"amended {venue} in cycle {cycle}\n" + self._cycle_line(int(cycle)))
 
     async def _on_button(self, data: str) -> None:
         kind, cycle, *rest = data.split(":")
