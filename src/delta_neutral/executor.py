@@ -479,7 +479,32 @@ async def fetch_market(
     return market
 
 
-def _status(db: sqlite3.Connection) -> str:
+async def plan_best(
+    executor: Executor,
+    config: AppConfig,
+    venues: Mapping[str, VenueAdapter],
+    instrument: str | None = None,
+) -> list[ManualInstruction]:
+    """Score the live market and open the best candidate (optionally for one instrument)."""
+    notional = config.sizing.notional_per_leg_usd
+    pairs = pairs_from_config(config)
+    if instrument is not None:
+        if instrument not in pairs:
+            raise CycleError(f"{instrument} is not a configured instrument")
+        pairs = {instrument: pairs[instrument]}
+    market = await fetch_market(venues, pairs, notional)
+    ranked = score(
+        market,
+        venues={n: config.venues[n] for n in venues},
+        notional_usd=notional,
+        hold_minutes=config.scoring.hold_minutes,
+    )
+    if not ranked:
+        raise CycleError("no candidate: no instrument has quotes on two venues right now")
+    return await executor.plan(ranked[0])
+
+
+def status_text(db: sqlite3.Connection) -> str:
     rows = db.execute("SELECT * FROM cycles ORDER BY id DESC LIMIT 20").fetchall()
     if not rows:
         return "no cycles yet"
@@ -502,7 +527,7 @@ def _status(db: sqlite3.Connection) -> str:
 async def _main(args: argparse.Namespace, config: AppConfig) -> None:
     db = open_engine_db(config.executor.db_path)
     if args.command == "status":
-        print(_status(db))
+        print(status_text(db))
         return
     venues = build_venues(config)
     try:
@@ -510,21 +535,7 @@ async def _main(args: argparse.Namespace, config: AppConfig) -> None:
         RiskMonitor(config, executor, db, positions=paper_positions(db))  # gates plan()
         instructions: list[ManualInstruction] = []
         if args.command == "plan":
-            notional = config.sizing.notional_per_leg_usd
-            pairs = pairs_from_config(config)
-            if args.instrument:
-                pairs = {args.instrument: pairs[args.instrument]}
-            market = await fetch_market(venues, pairs, notional)
-            ranked = score(
-                market,
-                venues={n: config.venues[n] for n in venues},
-                notional_usd=notional,
-                hold_minutes=config.scoring.hold_minutes,
-            )
-            if not ranked:
-                print("no candidate: no instrument has quotes on two venues right now")
-                return
-            instructions = await executor.plan(ranked[0])
+            instructions = await plan_best(executor, config, venues, args.instrument)
         elif args.command == "fill":
             instructions = await executor.confirm_manual(
                 args.cycle, Decimal(args.price), Decimal(args.size) if args.size else None
@@ -537,7 +548,7 @@ async def _main(args: argparse.Namespace, config: AppConfig) -> None:
             executor.abort(args.cycle, args.reason)
         for instruction in instructions:
             print("ACTION:", instruction.message())
-        print(_status(db))
+        print(status_text(db))
     finally:
         for venue in venues.values():
             await venue.aclose()
