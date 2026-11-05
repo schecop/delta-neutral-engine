@@ -119,23 +119,26 @@ def score(
     return sorted(out, key=_rank)
 
 
-def load_market(db: sqlite3.Connection, tick_id: int | None = None) -> tuple[int, Market]:
-    """One tick's quotes and funding from the collector's database (the latest with quotes)."""
-    if tick_id is None:
-        row = db.execute("SELECT MAX(id) FROM ticks WHERE quotes > 0").fetchone()
-        if row[0] is None:
-            raise LookupError("no tick with quotes yet")
-        tick_id = int(row[0])
-    rows = db.execute(
-        """SELECT q.venue, q.instrument, q.bid, q.ask, q.quote_ts, q.indicative,
-                  f.rate_pct_per_hour, f.funding_ts
-           FROM quotes q JOIN funding f
-             ON f.tick_id = q.tick_id AND f.venue = q.venue AND f.instrument = q.instrument
-           WHERE q.tick_id = ?""",
-        (tick_id,),
-    ).fetchall()
+_MARKET_SQL = """
+    SELECT q.tick_id, t.started_at, q.venue, q.instrument, q.bid, q.ask, q.quote_ts, q.indicative,
+           f.rate_pct_per_hour, f.funding_ts
+    FROM quotes q
+    JOIN ticks t ON t.id = q.tick_id
+    JOIN funding f ON f.tick_id = q.tick_id AND f.venue = q.venue AND f.instrument = q.instrument
+"""
+
+
+def load_markets(
+    db: sqlite3.Connection, where: str = "", params: tuple[object, ...] = ()
+) -> list[tuple[int, datetime, Market]]:
+    """(tick id, tick start, market) for every tick with quotes, oldest first."""
+    rows = db.execute(f"{_MARKET_SQL} {where} ORDER BY q.tick_id", params).fetchall()
+    out: list[tuple[int, datetime, Market]] = []
     market: dict[str, dict[str, tuple[Quote, FundingRate]]] = {}
-    for venue, instrument, bid, ask, quote_ts, indicative, rate, funding_ts in rows:
+    for tick_id, started_at, venue, instrument, bid, ask, quote_ts, indicative, rate, f_ts in rows:
+        if not out or out[-1][0] != tick_id:
+            market = {}
+            out.append((tick_id, datetime.fromisoformat(started_at), market))
         quote = Quote(
             venue=venue,
             instrument=instrument,
@@ -148,10 +151,21 @@ def load_market(db: sqlite3.Connection, tick_id: int | None = None) -> tuple[int
             venue=venue,
             instrument=instrument,
             rate_pct_per_hour=Decimal(rate),
-            ts=datetime.fromisoformat(funding_ts),
+            ts=datetime.fromisoformat(f_ts),
         )
         market.setdefault(instrument, {})[venue] = (quote, funding)
-    return tick_id, market
+    return out
+
+
+def load_market(db: sqlite3.Connection, tick_id: int | None = None) -> tuple[int, Market]:
+    """One tick's quotes and funding from the collector's database (the latest with quotes)."""
+    if tick_id is None:
+        row = db.execute("SELECT MAX(id) FROM ticks WHERE quotes > 0").fetchone()
+        if row[0] is None:
+            raise LookupError("no tick with quotes yet")
+        tick_id = int(row[0])
+    markets = load_markets(db, "WHERE q.tick_id = ?", (tick_id,))
+    return tick_id, markets[0][2] if markets else {}
 
 
 def format_ranking(candidates: list[Candidate]) -> str:
