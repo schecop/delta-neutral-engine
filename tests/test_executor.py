@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -88,7 +88,7 @@ def _setup(
     return config, venues, open_engine_db(tmp_path / "engine.db")
 
 
-def _candidate(config: AppConfig, venues: dict[str, VenueAdapter], instrument: str) -> Candidate:
+def _candidate(config: AppConfig, venues: Mapping[str, VenueAdapter], instrument: str) -> Candidate:
     market = asyncio.run(fetch_market(venues, {instrument: ["qfex", "variational"]}, N))
     ranked = score(market, config.venues, N, hold_minutes=30)
     return next(c for c in ranked if c.long_venue == "qfex")  # long qfex, short variational
@@ -191,6 +191,56 @@ def test_operations_out_of_order_are_refused(tmp_path: Path) -> None:
         asyncio.run(executor.confirm_manual(1, Decimal(1998)))
     with pytest.raises(CycleError, match="no cycle"):
         asyncio.run(executor.confirm_manual(99, Decimal(1)))
+
+
+def _both_manual(tmp_path: Path, clock: Clock) -> Executor:
+    config, venues, db = _setup(tmp_path, clock)
+    mids = {"XAU-USD": Decimal(2000)}
+    venues["qfex"] = FakeVenue("qfex", mids, spread_bps=Decimal(10), execution=Execution.MANUAL)
+    return Executor(config, venues, db, clock=clock)
+
+
+def test_two_manual_legs_are_confirmed_by_venue_at_their_reported_times(tmp_path: Path) -> None:
+    clock = Clock()
+    executor = _both_manual(tmp_path, clock)
+    instructions = asyncio.run(
+        executor.plan(_candidate(executor._config, executor._venues, "XAU-USD"))
+    )
+    assert {i.venue for i in instructions} == {"qfex", "variational"}  # both at once
+    db = executor._db
+
+    clock.advance(60)  # the operator places both orders, then reports
+    with pytest.raises(CycleError, match="say which venue"):
+        asyncio.run(executor.confirm_manual(1, Decimal(1998)))
+    first = asyncio.run(
+        executor.confirm_manual(
+            1, Decimal(1998), venue="variational", filled_at=T0 + timedelta(seconds=20)
+        )
+    )
+    assert first == []  # qfex was already instructed: no repeat
+    asyncio.run(
+        executor.confirm_manual(
+            1, Decimal(2001), venue="qfex", filled_at=T0 + timedelta(seconds=27)
+        )
+    )
+    assert _state(db) == CycleState.OPEN
+    assert _fills(db, "open") == {"variational": Decimal(1998), "qfex": Decimal(2001)}
+    opened = db.execute(
+        "SELECT data FROM cycle_events WHERE kind = 'open' ORDER BY rowid DESC"
+    ).fetchone()[0]
+    assert json.loads(opened)["unhedged_s"] == 7.0  # from the fill times, not the reports
+    due = db.execute("SELECT close_due_at FROM cycles").fetchone()[0]
+    assert datetime.fromisoformat(due) == T0 + timedelta(seconds=27, minutes=30)
+
+
+def test_a_reported_fill_time_outside_the_legs_window_is_refused(tmp_path: Path) -> None:
+    clock = Clock()
+    executor = _both_manual(tmp_path, clock)
+    asyncio.run(executor.plan(_candidate(executor._config, executor._venues, "XAU-USD")))
+    clock.advance(60)
+    for wrong in (T0 - timedelta(hours=1), T0 + timedelta(hours=1)):  # a typo in the hour
+        with pytest.raises(CycleError, match="outside the leg's window"):
+            asyncio.run(executor.confirm_manual(1, Decimal(1998), venue="qfex", filled_at=wrong))
 
 
 def test_live_mode_is_refused(tmp_path: Path) -> None:

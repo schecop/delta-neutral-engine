@@ -118,8 +118,12 @@ class ManualInstruction:
             f"cycle {self.cycle_id} {self.phase}: {self.action} {self.venue_size:.6f} "
             f"{self.symbol} on {self.venue} "
             f"(~${self.notional_usd:.0f}, quote ~{self.venue_price}). "
-            f"Then confirm: fill {self.cycle_id} --price <venue fill price>"
+            f"Then confirm: /fill {self.cycle_id} {self.venue} <fill price> [HH:MM:SS]"
         )
+
+
+# tolerance for a reported fill time: clocks differ, and the venue's clock is not ours
+FILL_TIME_SLACK = timedelta(seconds=10)
 
 
 def _utc_now() -> datetime:
@@ -208,22 +212,51 @@ class Executor:
         return await self._advance(cycle_id)
 
     async def confirm_manual(
-        self, cycle_id: int, venue_price: Decimal, venue_size: Decimal | None = None
+        self,
+        cycle_id: int,
+        venue_price: Decimal,
+        venue_size: Decimal | None = None,
+        *,
+        venue: str | None = None,
+        filled_at: datetime | None = None,
     ) -> list[ManualInstruction]:
-        """The operator filled a manual leg: record it in canonical units and move on."""
+        """The operator filled a manual leg: record it in canonical units and move on.
+
+        `venue` picks the leg when several manual legs wait (it is required then). `filled_at`
+        is the venue's fill time when the operator reports after the fact, so skew and unhedged
+        time are measured from the real fills, not from when the confirmations arrived.
+        """
         cycle = self._cycle(cycle_id)
         phase = self._phase(cycle)
         pending = [leg for leg in self._legs(cycle_id, phase) if leg["price"] is None]
-        manual = [leg for leg in pending if leg["execution"] == Execution.MANUAL]
-        if not manual:
+        waiting = [leg for leg in pending if leg["execution"] == Execution.MANUAL]
+        if not waiting:
             raise CycleError(f"cycle {cycle_id} is {cycle['state']}: no manual leg is waiting")
-        leg = manual[0]
+        if venue is not None:
+            chosen = [leg for leg in waiting if leg["venue"] == venue]
+            if not chosen:
+                raise CycleError(f"cycle {cycle_id}: no manual {venue} leg is waiting")
+            leg = chosen[0]
+        elif len(waiting) > 1:
+            names = " and ".join(leg["venue"] for leg in waiting)
+            raise CycleError(f"cycle {cycle_id} waits for {names}: say which venue filled")
+        else:
+            leg = waiting[0]
+        if filled_at is not None:
+            requested = datetime.fromisoformat(leg["requested_at"])
+            if not requested - FILL_TIME_SLACK <= filled_at <= self._clock() + FILL_TIME_SLACK:
+                raise CycleError(
+                    f"fill time {filled_at:%H:%M:%S} UTC is outside the leg's window "
+                    f"({requested:%H:%M:%S} UTC to now)"
+                )
         scale = self._registry.contract_size(cycle["instrument"], leg["venue"])
         size = Decimal(leg["size"]) if venue_size is None else venue_size * scale
         price = venue_price / scale  # venue unit -> canonical unit
         fee = self._fee(cycle["instrument"], leg["venue"]) * size * price
         with self._db:
-            self._fill(cycle_id, phase, leg["venue"], price, fee, size)
+            self._fill(cycle_id, phase, leg["venue"], price, fee, size, at=filled_at)
+        if len(waiting) > 1:
+            return []  # other manual legs still wait; they were instructed when the phase began
         return await self._advance(cycle_id)
 
     async def request_close(self, cycle_id: int) -> list[ManualInstruction]:
@@ -399,13 +432,21 @@ class Executor:
         )
 
     def _fill(
-        self, cycle_id: int, phase: str, venue: str, price: Decimal, fee: Decimal, size: Decimal
+        self,
+        cycle_id: int,
+        phase: str,
+        venue: str,
+        price: Decimal,
+        fee: Decimal,
+        size: Decimal,
+        *,
+        at: datetime | None = None,
     ) -> None:
-        at = self._clock().isoformat()
+        filled_at = (at or self._clock()).astimezone(UTC).isoformat()
         self._db.execute(
             "UPDATE legs SET price = ?, fee_usd = ?, size = ?, filled_at = ? "
             "WHERE cycle_id = ? AND phase = ? AND venue = ?",
-            (str(price), str(fee), str(size), at, cycle_id, phase, venue),
+            (str(price), str(fee), str(size), filled_at, cycle_id, phase, venue),
         )
         self._event(
             cycle_id,
@@ -479,13 +520,10 @@ async def fetch_market(
     return market
 
 
-async def plan_best(
-    executor: Executor,
-    config: AppConfig,
-    venues: Mapping[str, VenueAdapter],
-    instrument: str | None = None,
-) -> list[ManualInstruction]:
-    """Score the live market and open the best candidate (optionally for one instrument)."""
+async def rank_live(
+    config: AppConfig, venues: Mapping[str, VenueAdapter], instrument: str | None = None
+) -> list[Candidate]:
+    """Score the live market (optionally one instrument): every candidate, best first."""
     notional = config.sizing.notional_per_leg_usd
     pairs = pairs_from_config(config)
     if instrument is not None:
@@ -493,12 +531,22 @@ async def plan_best(
             raise CycleError(f"{instrument} is not a configured instrument")
         pairs = {instrument: pairs[instrument]}
     market = await fetch_market(venues, pairs, notional)
-    ranked = score(
+    return score(
         market,
         venues={n: config.venues[n] for n in venues},
         notional_usd=notional,
         hold_minutes=config.scoring.hold_minutes,
     )
+
+
+async def plan_best(
+    executor: Executor,
+    config: AppConfig,
+    venues: Mapping[str, VenueAdapter],
+    instrument: str | None = None,
+) -> list[ManualInstruction]:
+    """Score the live market and open the best candidate (optionally for one instrument)."""
+    ranked = await rank_live(config, venues, instrument)
     if not ranked:
         raise CycleError("no candidate: no instrument has quotes on two venues right now")
     return await executor.plan(ranked[0])
@@ -538,7 +586,10 @@ async def _main(args: argparse.Namespace, config: AppConfig) -> None:
             instructions = await plan_best(executor, config, venues, args.instrument)
         elif args.command == "fill":
             instructions = await executor.confirm_manual(
-                args.cycle, Decimal(args.price), Decimal(args.size) if args.size else None
+                args.cycle,
+                Decimal(args.price),
+                Decimal(args.size) if args.size else None,
+                venue=args.venue,
             )
         elif args.command == "close":
             instructions = await executor.request_close(args.cycle)
@@ -563,6 +614,7 @@ def main() -> None:
     parser.add_argument("--instrument")
     parser.add_argument("--price")
     parser.add_argument("--size", help="venue units, if the fill differs from the instruction")
+    parser.add_argument("--venue", help="which manual leg filled, when several wait")
     parser.add_argument("--reason", default="operator")
     args = parser.parse_args()
     if args.command in ("fill", "close", "abort") and args.cycle is None:

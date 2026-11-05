@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from delta_neutral.config import AppConfig, load_config
 from delta_neutral.instruments import InstrumentRegistry, UnknownInstrumentError
 from delta_neutral.models import Execution
+from delta_neutral.venues.base import NotTradableError, as_trading
 from delta_neutral.venues.factory import AdapterNotAvailableError, build_venues
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "example.yaml"
@@ -84,6 +85,15 @@ def test_factory_rejects_execution_mismatch() -> None:
     data["venues"]["variational"]["execution"] = "api"
     with pytest.raises(ValueError, match="execution"):
         build_venues(AppConfig.model_validate(data), skip_missing=True)
+
+
+def test_config_may_run_an_api_venue_by_hand() -> None:
+    data = _example_dict()
+    data["venues"]["qfex"]["execution"] = "manual"
+    venues = build_venues(AppConfig.model_validate(data))
+    assert venues["qfex"].execution is Execution.MANUAL
+    with pytest.raises(NotTradableError):
+        as_trading(venues["qfex"])  # no code path can place an order on it
 
 
 def test_factory_requires_every_adapter_unless_told() -> None:

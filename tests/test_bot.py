@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from delta_neutral.bot import EngineBot
+from delta_neutral.bot import EngineBot, parse_fill_time
 from delta_neutral.executor import CycleState
 from delta_neutral.telegram import Buttons
 from tests.test_executor import Clock, _setup
@@ -75,12 +75,20 @@ def test_plan_then_the_filled_button_opens_the_cycle(tmp_path: Path) -> None:
     assert chat == CHAT and text.startswith("ACTION cycle 1 open:") and "XAU-PERP" in text
     assert buttons is not None
     (filled, data), _abort = buttons[0]
-    assert filled.startswith("Filled at ~") and data.startswith("fill:1:")
+    assert filled.startswith("variational filled at ~") and data.startswith("fill:1:variational:")
     assert len(data.encode()) <= 64  # Telegram's callback_data limit
 
     asyncio.run(bot.handle(_press(data)))
     assert messenger.answered == ["cb1"]
     assert _state(bot) == CycleState.OPEN
+
+
+def test_score_lists_the_best_candidates_and_opens_nothing(tmp_path: Path) -> None:
+    bot, messenger, _ = _bot(tmp_path)
+    asyncio.run(bot.handle(_message("/score")))
+    (text,) = messenger.texts()
+    assert text.startswith("top ") and "1. XAU-USD long " in text and "cost $" in text
+    assert bot.executor._db.execute("SELECT COUNT(*) FROM cycles").fetchone()[0] == 0
 
 
 def test_fill_command_with_another_price(tmp_path: Path) -> None:
@@ -94,6 +102,26 @@ def test_fill_command_with_another_price(tmp_path: Path) -> None:
     assert price == "1997.5"
 
 
+def test_fill_with_venue_and_local_time(tmp_path: Path) -> None:
+    bot, _, clock = _bot(tmp_path)
+    asyncio.run(bot.handle(_message("/plan XAU-USD")))
+    planned = clock.now
+    clock.advance(90)
+    local = (planned + timedelta(seconds=30)).astimezone()  # what the venue's history shows
+    asyncio.run(bot.handle(_message(f"/fill 1 variational 1997.5 {local:%H:%M:%S}")))
+    row = bot.executor._db.execute(
+        "SELECT price, filled_at FROM legs WHERE venue = 'variational' AND phase = 'open'"
+    ).fetchone()
+    assert row[0] == "1997.5"
+    assert datetime.fromisoformat(row[1]) == planned + timedelta(seconds=30)
+
+
+def test_a_fill_time_past_now_belongs_to_yesterday() -> None:
+    now = datetime(2026, 11, 5, 23, 0, 30, tzinfo=UTC)
+    later_today = (now + timedelta(hours=1)).astimezone()
+    assert parse_fill_time(f"{later_today:%H:%M:%S}", now) == now + timedelta(hours=1, days=-1)
+
+
 def test_errors_are_answered_not_raised(tmp_path: Path) -> None:
     bot, messenger, _ = _bot(tmp_path)
     asyncio.run(bot.handle(_message("/close 99")))
@@ -102,7 +130,7 @@ def test_errors_are_answered_not_raised(tmp_path: Path) -> None:
     texts = messenger.texts()
     assert texts[0] == "error: no cycle 99"
     assert texts[1].startswith("error:")
-    assert texts[2].startswith("/plan")  # unknown command: the help
+    assert texts[2].startswith("/score")  # unknown command: the help
 
 
 def test_the_engine_pass_alerts_and_sends_the_close_instruction(tmp_path: Path) -> None:

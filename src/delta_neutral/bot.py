@@ -11,9 +11,10 @@ milliseconds, not after a fresh WebSocket handshake):
 - engine: every few seconds, close cycles past their hold, run the risk monitor, and forward
   each new risk event as an alert.
 
-Commands: /plan [INSTRUMENT], /fill CYCLE PRICE [SIZE], /close CYCLE, /abort CYCLE, /status,
-/events. A manual instruction comes with buttons: "Filled at ~P" confirms at the quoted price;
-another price goes through /fill.
+Commands: /score [INSTRUMENT], /plan [INSTRUMENT], /fill CYCLE [VENUE] PRICE [HH:MM:SS] [SIZE],
+/close CYCLE, /abort CYCLE, /status, /events. A manual instruction comes with buttons:
+"<venue> filled at ~P" confirms that leg at the quoted price, now; another price or an earlier
+fill time goes through /fill.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import contextlib
 import logging
 import sqlite3
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Protocol
@@ -37,19 +38,25 @@ from delta_neutral.executor import (
     ManualInstruction,
     open_engine_db,
     plan_best,
+    rank_live,
     status_text,
 )
 from delta_neutral.risk import SCHEMA as RISK_SCHEMA
 from delta_neutral.risk import RiskMonitor, paper_positions
+from delta_neutral.scorer import Candidate
 from delta_neutral.telegram import Buttons, TelegramClient
 from delta_neutral.venues.base import VenueAdapter
 from delta_neutral.venues.factory import build_venues
 
 log = logging.getLogger(__name__)
 
+TOP = 5
+
 HELP = (
+    "/score [INSTRUMENT] - the best candidates right now, nothing opened\n"
     "/plan [INSTRUMENT] - score now and open the best cycle\n"
-    "/fill CYCLE PRICE [SIZE] - confirm a manual leg at the venue's fill price\n"
+    "/fill CYCLE [VENUE] PRICE [HH:MM:SS] [SIZE] - confirm a manual leg: the venue's fill\n"
+    "  price, and its fill time (your local time) if you report after the fact\n"
     "/close CYCLE - close before the hold ends\n"
     "/abort CYCLE - cancel a cycle before any fill\n"
     "/status - recent cycles\n"
@@ -63,9 +70,36 @@ class Messenger(Protocol):
     async def answer(self, callback_id: str, text: str = "") -> None: ...
 
 
+def ranking_text(candidates: list[Candidate], notional: Decimal, hold_minutes: int) -> str:
+    """The top candidates, two lines each: narrow enough for a phone."""
+    if not candidates:
+        return "no candidate: no instrument has quotes on two venues right now"
+    shown = min(TOP, len(candidates))
+    lines = [f"top {shown} of {len(candidates)} (${notional}/leg, {hold_minutes} min)"]
+    for n, c in enumerate(candidates[:TOP], 1):
+        per_usd = "-" if c.score is None else f"{c.score:.1f}"
+        lines.append(f"{n}. {c.instrument} long {c.long_venue} / short {c.short_venue}")
+        lines.append(
+            f"   cost ${c.cost_usd:.3f} (spread {c.spread_usd:.3f}, fees {c.fees_usd:.3f}, "
+            f"fund {c.funding_usd:.3f}) reward/$ {per_usd}"
+            + (f" [{' '.join(c.flags)}]" if c.flags else "")
+        )
+    return "\n".join(lines)
+
+
+def parse_fill_time(text: str, now: datetime) -> datetime:
+    """HH:MM[:SS] on this machine's clock (the operator's local time), the latest such moment
+    not after now: a fill reported just past midnight belongs to yesterday."""
+    local_now = now.astimezone()
+    at = datetime.combine(local_now.date(), time.fromisoformat(text), local_now.tzinfo)
+    if at > local_now + timedelta(minutes=1):
+        at -= timedelta(days=1)
+    return at.astimezone(UTC)
+
+
 def _buttons(i: ManualInstruction) -> Buttons:
     price = format(i.venue_price, "f")
-    row = [(f"Filled at ~{price}", f"fill:{i.cycle_id}:{price}")]
+    row = [(f"{i.venue} filled at ~{price}", f"fill:{i.cycle_id}:{i.venue}:{price}")]
     if i.phase == "open":
         row.append(("Abort", f"abort:{i.cycle_id}"))
     return [row]
@@ -87,6 +121,7 @@ class EngineBot:
         self._db = db
         self._tg = messenger
         self._chat_id = chat_id
+        self._clock = clock
         self.executor = Executor(config, venues, db, clock=clock)
         self.monitor = RiskMonitor(
             config, self.executor, db, positions=paper_positions(db), clock=clock
@@ -122,19 +157,22 @@ class EngineBot:
     async def _on_command(self, text: str) -> None:
         command, *args = text.split() or [""]
         match command.split("@")[0]:
+            case "/score":
+                ranked = await rank_live(self._config, self._venues, *args[:1])
+                await self._say(
+                    ranking_text(
+                        ranked,
+                        self._config.sizing.notional_per_leg_usd,
+                        self._config.scoring.hold_minutes,
+                    )
+                )
             case "/plan":
                 await self._instruct(
                     await plan_best(self.executor, self._config, self._venues, *args[:1])
                 )
                 await self._say(status_text(self._db).splitlines()[0])
             case "/fill":
-                cycle, price, *size = args
-                await self._instruct(
-                    await self.executor.confirm_manual(
-                        int(cycle), Decimal(price), Decimal(size[0]) if size else None
-                    )
-                )
-                await self._say(self._cycle_line(int(cycle)))
+                await self._fill(args)
             case "/close":
                 await self._instruct(await self.executor.request_close(int(args[0])))
             case "/abort":
@@ -147,10 +185,31 @@ class EngineBot:
             case _:
                 await self._say(HELP)
 
+    async def _fill(self, args: list[str]) -> None:
+        """/fill CYCLE [VENUE] PRICE [HH:MM[:SS]] [SIZE]: a time has colons, a size has none."""
+        cycle, *rest = args
+        venue = rest.pop(0) if rest and rest[0] in self._venues else None
+        price, *extra = rest
+        times = [x for x in extra if ":" in x]
+        sizes = [x for x in extra if ":" not in x]
+        await self._instruct(
+            await self.executor.confirm_manual(
+                int(cycle),
+                Decimal(price),
+                Decimal(sizes[0]) if sizes else None,
+                venue=venue,
+                filled_at=parse_fill_time(times[0], self._clock()) if times else None,
+            )
+        )
+        await self._say(self._cycle_line(int(cycle)))
+
     async def _on_button(self, data: str) -> None:
         kind, cycle, *rest = data.split(":")
         if kind == "fill":
-            await self._instruct(await self.executor.confirm_manual(int(cycle), Decimal(rest[0])))
+            venue, price = rest
+            await self._instruct(
+                await self.executor.confirm_manual(int(cycle), Decimal(price), venue=venue)
+            )
             await self._say(self._cycle_line(int(cycle)))
         elif kind == "abort":
             self.executor.abort(int(cycle), "operator")

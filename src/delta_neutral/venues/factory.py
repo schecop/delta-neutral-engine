@@ -2,7 +2,7 @@
 
 Adding a venue means one adapter module plus one line in `_BUILDERS`. The declared `execution`
 in config must match what the adapter is, so a config typo can never make a manual venue look
-tradable (or the reverse).
+tradable. The one allowed difference is the safe one: config may run an API venue by hand.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 from delta_neutral.config import AppConfig
 from delta_neutral.instruments import InstrumentRegistry
+from delta_neutral.models import Execution
 from delta_neutral.venues.base import VenueAdapter
 from delta_neutral.venues.qfex import QfexVenue
 from delta_neutral.venues.variational import VariationalVenue
@@ -42,6 +43,10 @@ def build_venues(config: AppConfig, *, skip_missing: bool = False) -> dict[str, 
                 continue
             raise AdapterNotAvailableError(f"{name}: no adapter named {venue_config.adapter!r}")
         venue = builder(name, registry)
+        if venue_config.execution is Execution.MANUAL and venue.execution is Execution.API:
+            # an API venue may be operated by hand (the operator places its orders); this only
+            # takes trading away, so the executor sends manual instructions instead of orders
+            venue.execution = Execution.MANUAL
         if venue.execution is not venue_config.execution:
             raise ValueError(
                 f"{name}: config says execution={venue_config.execution}, "
