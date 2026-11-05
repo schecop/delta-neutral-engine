@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -41,6 +41,7 @@ from delta_neutral.collector import pairs_from_config, snapshot_pair
 from delta_neutral.config import AppConfig, load_config
 from delta_neutral.instruments import InstrumentRegistry
 from delta_neutral.models import Execution, FundingRate, Quote, Side
+from delta_neutral.risk import RiskMonitor, paper_positions, weekend_blocks
 from delta_neutral.scorer import Candidate, Market, score
 from delta_neutral.venues.base import VenueAdapter, quote_for_notional
 from delta_neutral.venues.factory import build_venues
@@ -125,6 +126,10 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+# (now, hold minutes) -> reasons a new cycle may not open; empty means it may
+Gate = Callable[[datetime, int], Awaitable[list[str]]]
+
+
 def open_engine_db(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
@@ -146,7 +151,9 @@ class Executor:
         venues: Mapping[str, VenueAdapter],
         db: sqlite3.Connection,
         clock: Callable[[], datetime] = _utc_now,
+        gate: Gate | None = None,
     ) -> None:
+        """`gate` adds the risk monitor's checks; the weekend rule applies even without one."""
         if config.mode != "dry_run":
             raise CycleError("the executor runs in dry-run only; live order entry lands in D5")
         self._config = config
@@ -154,12 +161,19 @@ class Executor:
         self._db = db
         self._clock = clock
         self._registry = InstrumentRegistry(config.instruments)
+        self.gate = gate
 
     # -- operations ---------------------------------------------------------------------------
 
     async def plan(self, candidate: Candidate) -> list[ManualInstruction]:
         """Create a cycle for a scored candidate and start opening it."""
         now = self._clock()
+        hold = int(candidate.hold_hours * 60)
+        blocks = weekend_blocks(now, hold, self._config.risk.weekend)
+        if self.gate is not None:
+            blocks += await self.gate(now, hold)
+        if blocks:
+            raise CycleError("not opening: " + "; ".join(blocks))
         notional = candidate.notional_usd
         funding = await self._funding_spread(candidate)
         with self._db:
@@ -172,7 +186,7 @@ class Executor:
                     candidate.long_venue,
                     candidate.short_venue,
                     str(notional),
-                    int(candidate.hold_hours * 60),
+                    hold,
                     str(candidate.cost_usd),
                     str(funding),
                     CycleState.PLANNED,
@@ -236,6 +250,11 @@ class Executor:
         for row in due:
             out += await self.request_close(row["id"])
         return out
+
+    async def resume(self, cycle_id: int) -> list[ManualInstruction]:
+        """Retry whatever the current phase is waiting for (the risk monitor calls this)."""
+        self._phase(self._cycle(cycle_id))
+        return await self._advance(cycle_id)
 
     def abort(self, cycle_id: int, reason: str) -> None:
         """Cancel a cycle before any leg filled. After a fill, the only way out is to close."""
@@ -488,6 +507,7 @@ async def _main(args: argparse.Namespace, config: AppConfig) -> None:
     venues = build_venues(config)
     try:
         executor = Executor(config, venues, db)
+        RiskMonitor(config, executor, db, positions=paper_positions(db))  # gates plan()
         instructions: list[ManualInstruction] = []
         if args.command == "plan":
             notional = config.sizing.notional_per_leg_usd
