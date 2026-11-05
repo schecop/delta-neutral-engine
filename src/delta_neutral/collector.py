@@ -90,7 +90,7 @@ def open_db(path: Path) -> sqlite3.Connection:
 Snapshot = tuple[str, str, tuple[Quote, FundingRate] | tuple[str, str]]
 
 
-async def _snapshot(venue: VenueAdapter, instrument: str, usd: Decimal) -> Snapshot:
+async def snapshot_pair(venue: VenueAdapter, instrument: str, usd: Decimal) -> Snapshot:
     """(venue, instrument, (quote, funding) or (event kind, message)); never raises."""
     try:
         quote = await quote_for_notional(venue, instrument, usd)
@@ -121,7 +121,7 @@ async def collect_tick(
     """
     started, t0 = clock(), monotonic()
     jobs = [
-        _snapshot(venues[v], instrument, notional_usd)
+        snapshot_pair(venues[v], instrument, notional_usd)
         for instrument, names in sorted(pairs.items())
         for v in names
         if v in venues

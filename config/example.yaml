@@ -66,3 +66,6 @@ collector:
 
 scoring:
   hold_minutes: 60         # the hold each candidate is costed at; within risk min/max_hold_minutes
+
+executor:
+  db_path: data/engine.db  # cycle state (SQLite); survives restarts mid-cycle

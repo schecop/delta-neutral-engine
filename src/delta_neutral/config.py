@@ -102,6 +102,10 @@ class CollectorConfig(_Strict):
     db_path: Path
 
 
+class ExecutorConfig(_Strict):
+    db_path: Path  # cycle state; separate from the collector's market data
+
+
 class AppConfig(_Strict):
     mode: Literal["dry_run", "live"]
     venues: dict[str, VenueConfig]
@@ -112,6 +116,7 @@ class AppConfig(_Strict):
     alerts: AlertsConfig
     collector: CollectorConfig
     scoring: ScoringConfig
+    executor: ExecutorConfig
 
     @model_validator(mode="after")
     def _cross_checks(self) -> AppConfig:
