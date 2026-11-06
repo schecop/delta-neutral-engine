@@ -35,11 +35,18 @@ class _Breakable(FakeVenue):
 
 
 class Engine:
-    def __init__(self, tmp_path: Path, *, margin_free: Decimal | None = None) -> None:
+    def __init__(
+        self, tmp_path: Path, *, margin_free: Decimal | None = None, manual_qfex: bool = False
+    ) -> None:
         self.clock = Clock()
         self.clock.now = THURSDAY
         mids = {"XAU-USD": Decimal(2000)}
-        self.qfex = _Breakable("qfex", mids, spread_bps=Decimal(10))
+        self.qfex = _Breakable(
+            "qfex",
+            mids,
+            spread_bps=Decimal(10),
+            execution=Execution.MANUAL if manual_qfex else Execution.API,
+        )
         self.venues: dict[str, VenueAdapter] = {
             "variational": FakeVenue(
                 "variational", mids, spread_bps=Decimal(20), execution=Execution.MANUAL
@@ -126,6 +133,36 @@ def test_unhedged_that_cannot_be_fixed_asks_for_an_unwind(tmp_path: Path) -> Non
     engine.clock.advance(61)
     engine.check()
     assert engine.events() == [("unhedged", "unwind_required")]
+
+
+def test_an_unconfirmed_manual_leg_asks_for_its_fill_instead_of_retrying(tmp_path: Path) -> None:
+    # FAILURES 2026-11-06: both legs filled 1s apart, the second /fill came 74s later
+    engine = Engine(tmp_path, manual_qfex=True)
+    engine.plan()
+    asyncio.run(engine.executor.confirm_manual(1, Decimal(1998), venue="variational"))
+    engine.clock.advance(61)
+    assert engine.check() == [("unhedged", "confirm_fill")]
+    assert engine.state() == CycleState.OPENING  # nothing was retried or unwound
+    message = engine.db.execute("SELECT message FROM risk_events").fetchone()[0]
+    assert "qfex unconfirmed 61s" in message and "/fill" in message
+
+
+def test_a_late_confirmation_is_recorded_once_as_unhedged_time_exceeded(tmp_path: Path) -> None:
+    # FAILURES 2026-11-06: the API leg waits for the manual confirmation, typed 90s after the fill
+    engine = Engine(tmp_path)
+    engine.plan()
+    filled = engine.clock.now
+    engine.clock.advance(90)
+    asyncio.run(engine.executor.confirm_manual(1, Decimal(1998), filled_at=filled))
+    assert engine.state() == CycleState.OPEN  # no pass ever saw one leg in without the other
+    assert engine.check() == [("unhedged", "exceeded")]
+    engine.clock.advance(600)  # past the repeat window: a fact in the past is not alerted again
+    engine.check()
+    assert engine.events() == [("unhedged", "exceeded")]
+    assert (
+        "open phase was unhedged 90s"
+        in engine.db.execute("SELECT message FROM risk_events").fetchone()[0]
+    )
 
 
 def test_a_lost_leg_closes_the_cycle(tmp_path: Path) -> None:

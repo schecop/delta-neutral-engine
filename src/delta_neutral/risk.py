@@ -11,7 +11,12 @@ through the executor and records it in `risk_events`, so a human (and the superv
 every decision. No LLM is involved anywhere here.
 
     unhedged     a phase has some legs filled and others not for over max_unhedged_seconds:
-                 retry the missing legs; if that fails, the filled leg must be unwound (urgent)
+                 retry the missing legs; if that fails, the filled leg must be unwound (urgent).
+                 If every missing leg is manual, it may have filled unconfirmed: ask the
+                 operator to confirm it (`confirm_fill`), since only they know. A phase that
+                 completed with its fills further apart than the limit was unhedged that long
+                 even if no pass caught it in flight (an API leg waits for the manual leg's
+                 confirmation): recorded once, as `exceeded`
     leg_missing  a venue no longer holds a leg the engine expects (closed or liquidated):
                  close the cycle, i.e. the other leg
     margin       free margin below min_free_margin: no new cycles; below
@@ -54,6 +59,7 @@ log = logging.getLogger(__name__)
 NEW_YORK = ZoneInfo("America/New_York")
 US_CLOSE, US_OPEN = time(16, 0), time(9, 30)
 REPEAT_AFTER = timedelta(minutes=5)  # a breach that persists is recorded again after this
+RECENT_CYCLES = timedelta(days=1)  # completed phases are checked for cycles planned since then
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS risk_events (
@@ -75,7 +81,7 @@ MarginSource = Callable[[], Awaitable[Mapping[str, MarginState]]]
 @dataclass(frozen=True)
 class Breach:
     rule: str
-    action: str  # resume | close_cycle | block_new | rebalance
+    action: str  # resume | confirm_fill | exceeded | close_cycle | block_new | rebalance
     message: str
     cycle_id: int | None = None
     venue: str | None = None
@@ -89,6 +95,7 @@ class LegView:
     side: str
     size: Decimal
     filled_at: datetime | None
+    execution: str = "api"
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,16 @@ class CycleView:
     state: str
     instrument: str
     legs: tuple[LegView, ...]
+
+
+@dataclass(frozen=True)
+class PhaseView:
+    """A phase whose legs have all filled."""
+
+    cycle_id: int
+    phase: str
+    first_fill: datetime
+    last_fill: datetime
 
 
 # -- the rules (pure) -------------------------------------------------------------------------
@@ -138,7 +155,23 @@ def check_unhedged(now: datetime, cycles: list[CycleView], risk: RiskConfig) -> 
         if not filled or len(filled) == len(legs):
             continue  # nothing exposed yet, or the phase is complete
         seconds = (now - min(filled)).total_seconds()
-        if seconds > risk.max_unhedged_seconds:
+        if seconds <= risk.max_unhedged_seconds:
+            continue
+        waiting = [leg for leg in legs if leg.filled_at is None]
+        if all(leg.execution == "manual" for leg in waiting):
+            # an unconfirmed manual leg may have filled already: only the operator knows
+            names = ", ".join(leg.venue for leg in waiting)
+            out.append(
+                Breach(
+                    "unhedged",
+                    "confirm_fill",
+                    f"cycle {c.id} {phase} phase: {names} unconfirmed {seconds:.0f}s after "
+                    f"the first fill (max {risk.max_unhedged_seconds}s). If it filled, /fill "
+                    "it; if not, you are unhedged",
+                    c.id,
+                )
+            )
+        else:
             out.append(
                 Breach(
                     "unhedged",
@@ -146,6 +179,25 @@ def check_unhedged(now: datetime, cycles: list[CycleView], risk: RiskConfig) -> 
                     f"cycle {c.id} {phase} phase unhedged for "
                     f"{seconds:.0f}s (max {risk.max_unhedged_seconds}s)",
                     c.id,
+                )
+            )
+    return out
+
+
+def check_completed(phases: list[PhaseView], risk: RiskConfig) -> list[Breach]:
+    """Unhedged time after the fact, from the fill times: no pass sees a manual leg filled before
+    the operator confirms it, and the API leg is only placed then."""
+    out = []
+    for p in phases:
+        seconds = (p.last_fill - p.first_fill).total_seconds()
+        if seconds > risk.max_unhedged_seconds:
+            out.append(
+                Breach(
+                    "unhedged",
+                    "exceeded",
+                    f"cycle {p.cycle_id} {p.phase} phase was unhedged {seconds:.0f}s "
+                    f"(max {risk.max_unhedged_seconds}s), from the fill times",
+                    p.cycle_id,
                 )
             )
     return out
@@ -240,12 +292,12 @@ def evaluate(
 def load_cycles(db: sqlite3.Connection) -> list[CycleView]:
     """Every cycle that is not finished, from the executor's database."""
     rows = db.execute(
-        "SELECT c.id, c.state, c.instrument, l.phase, l.venue, l.side, l.size, l.filled_at "
-        "FROM cycles c JOIN legs l ON l.cycle_id = c.id "
+        "SELECT c.id, c.state, c.instrument, l.phase, l.venue, l.side, l.size, l.filled_at, "
+        "l.execution FROM cycles c JOIN legs l ON l.cycle_id = c.id "
         "WHERE c.state NOT IN ('closed', 'aborted') ORDER BY c.id"
     ).fetchall()
     legs: dict[tuple[int, str, str], list[LegView]] = defaultdict(list)
-    for cid, state, instrument, phase, venue, side, size, filled_at in rows:
+    for cid, state, instrument, phase, venue, side, size, filled_at, execution in rows:
         legs[cid, state, instrument].append(
             LegView(
                 phase,
@@ -254,9 +306,28 @@ def load_cycles(db: sqlite3.Connection) -> list[CycleView]:
                 side,
                 Decimal(size),
                 datetime.fromisoformat(filled_at) if filled_at else None,
+                execution,
             )
         )
     return [CycleView(cid, state, i, tuple(ls)) for (cid, state, i), ls in legs.items()]
+
+
+def load_completed_phases(db: sqlite3.Connection, since: datetime) -> list[PhaseView]:
+    """Every phase with all its legs filled, of the cycles planned since `since`."""
+    rows = db.execute(
+        "SELECT l.cycle_id, l.phase, l.filled_at FROM legs l JOIN cycles c ON c.id = l.cycle_id "
+        "WHERE c.created_at >= ? ORDER BY l.cycle_id",
+        (since.isoformat(),),
+    ).fetchall()
+    fills: dict[tuple[int, str], list[str | None]] = defaultdict(list)
+    for cycle_id, phase, filled_at in rows:
+        fills[cycle_id, phase].append(filled_at)
+    out = []
+    for (cycle_id, phase), times in fills.items():
+        if all(times):
+            at = [datetime.fromisoformat(t) for t in times if t]
+            out.append(PhaseView(cycle_id, phase, min(at), max(at)))
+    return out
 
 
 def paper_positions(db: sqlite3.Connection) -> PositionSource:
@@ -313,6 +384,9 @@ class RiskMonitor:
         now = self._clock()
         cycles = load_cycles(self._db)
         breaches = evaluate(now, cycles, await self._positions(), await self._margins(), self._risk)
+        breaches += check_completed(
+            load_completed_phases(self._db, now - RECENT_CYCLES), self._risk
+        )
         for breach in breaches:
             action = breach.action
             if breach.cycle_id is not None:
@@ -334,10 +408,19 @@ class RiskMonitor:
         return breaches
 
     def _record(self, now: datetime, b: Breach) -> None:
+        once = b.action == "exceeded"  # a past fact: recorded once, never repeated
         recent = self._db.execute(
             "SELECT 1 FROM risk_events WHERE rule = ? AND action = ? AND cycle_id IS ? "
-            "AND venue IS ? AND at > ?",
-            (b.rule, b.action, b.cycle_id, b.venue, (now - REPEAT_AFTER).isoformat()),
+            "AND venue IS ? AND at > ? AND (? = 0 OR message = ?)",
+            (
+                b.rule,
+                b.action,
+                b.cycle_id,
+                b.venue,
+                "" if once else (now - REPEAT_AFTER).isoformat(),
+                int(once),
+                b.message,
+            ),
         ).fetchone()
         if recent:
             return  # the same breach, already recorded and alerted a moment ago
