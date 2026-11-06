@@ -59,7 +59,13 @@ class TelegramClient:
         return result
 
     async def send(self, chat_id: int, text: str, buttons: Buttons | None = None) -> None:
-        params: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        """`text` is Telegram HTML: the caller escapes what it did not write (`cards.esc`)."""
+        params: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": True},
+        }
         if buttons:
             params["reply_markup"] = {
                 "inline_keyboard": [

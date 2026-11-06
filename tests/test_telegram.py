@@ -48,6 +48,8 @@ def test_buttons_are_sent_as_an_inline_keyboard() -> None:
         {
             "chat_id": 42,
             "text": "hi",
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": True},
             "reply_markup": {
                 "inline_keyboard": [
                     [

@@ -73,22 +73,25 @@ def test_plan_then_the_filled_button_opens_the_cycle(tmp_path: Path) -> None:
     bot, messenger, _ = _bot(tmp_path)
     asyncio.run(bot.handle(_message("/plan XAU-USD")))
     chat, text, buttons = messenger.sent[0]
-    assert chat == CHAT and text.startswith("ACTION cycle 1 open:") and "XAU-PERP" in text
+    assert chat == CHAT and text.startswith("<b>▶️ OPEN · cycle 1</b>\n<b>VARIATIONAL</b>")
+    assert "<b>🔴 SELL</b> <code>0.5</code> <b>XAU-PERP</b>" in text  # size is tap-to-copy
     assert buttons is not None
     (filled, data), _abort = buttons[0]
-    assert filled.startswith("variational filled at ~") and data.startswith("fill:1:variational:")
+    assert filled.startswith("✅ variational filled ~") and data.startswith("fill:1:variational:")
     assert len(data.encode()) <= 64  # Telegram's callback_data limit
 
     asyncio.run(bot.handle(_press(data)))
     assert messenger.answered == ["cb1"]
     assert _state(bot) == CycleState.OPEN
+    card = messenger.texts()[-1]
+    assert card.startswith("✅ <b>cycle 1 · XAU-USD · OPEN</b>") and "close at" in card
 
 
 def test_score_lists_the_best_candidates_and_opens_nothing(tmp_path: Path) -> None:
     bot, messenger, _ = _bot(tmp_path)
     asyncio.run(bot.handle(_message("/score")))
     (text,) = messenger.texts()
-    assert text.startswith("top ") and "1. XAU-USD long " in text and "cost $" in text
+    assert text.startswith("📊 <b>Top ") and "<b>1. XAU-USD · $" in text and "fees $" in text
     assert bot.executor._db.execute("SELECT COUNT(*) FROM cycles").fetchone()[0] == 0
 
 
@@ -122,13 +125,13 @@ def test_amend_corrects_a_fill_from_the_chat(tmp_path: Path) -> None:
     asyncio.run(bot.handle(_message("/plan XAU-USD")))
     asyncio.run(bot.handle(_message("/fill 1 variational 1998")))
     asyncio.run(bot.handle(_message("/amend 1 variational size=0.4 price=1997")))
-    assert messenger.texts()[-1].startswith("amended variational in cycle 1")
+    assert messenger.texts()[-1].startswith("✏️ amended variational\n")
     row = bot.executor._db.execute(
         "SELECT size, price FROM legs WHERE venue = 'variational' AND phase = 'open'"
     ).fetchone()
     assert (Decimal(row[0]), Decimal(row[1])) == (Decimal("0.4"), Decimal(1997))
     asyncio.run(bot.handle(_message("/amend 1 variational colour=red")))
-    assert messenger.texts()[-1].startswith("error: usage: /amend")
+    assert messenger.texts()[-1].startswith("⛔ error: usage: /amend")
 
 
 def test_a_fill_time_past_now_belongs_to_yesterday() -> None:
@@ -143,8 +146,8 @@ def test_errors_are_answered_not_raised(tmp_path: Path) -> None:
     asyncio.run(bot.handle(_message("/fill 1 not-a-price")))
     asyncio.run(bot.handle(_message("/what")))
     texts = messenger.texts()
-    assert texts[0] == "error: no cycle 99"
-    assert texts[1].startswith("error:")
+    assert texts[0] == "⛔ error: no cycle 99"
+    assert texts[1].startswith("⛔ error:")
     assert texts[2].startswith("/score")  # unknown command: the help
 
 
@@ -157,12 +160,12 @@ def test_the_engine_pass_alerts_and_sends_the_close_instruction(tmp_path: Path) 
     clock.now = FRIDAY_IN_WINDOW  # past the hold and inside the weekend window
     asyncio.run(bot.engine_pass())
     texts = messenger.texts()
-    assert any(t.startswith("ACTION cycle 1 close:") for t in texts)
+    assert any(t.startswith("<b>⏹ CLOSE · cycle 1</b>") and "(closes your" in t for t in texts)
     assert _state(bot) == CycleState.CLOSING
     # the close instruction is sent once, not again on the next pass
     messenger.sent.clear()
     asyncio.run(bot.engine_pass())
-    assert not any(t.startswith("ACTION") for t in messenger.texts())
+    assert not any("CLOSE · cycle" in t for t in messenger.texts())
 
 
 def test_risk_events_are_forwarded_once(tmp_path: Path) -> None:
@@ -172,10 +175,10 @@ def test_risk_events_are_forwarded_once(tmp_path: Path) -> None:
     bot.monitor._positions = _empty_positions  # qfex lost its leg
     messenger.sent.clear()
     asyncio.run(bot.engine_pass())
-    alerts = [t for t in messenger.texts() if t.startswith("RISK")]
-    assert len(alerts) == 1 and "leg_missing -> close_cycle" in alerts[0]
+    alerts = [t for t in messenger.texts() if "RISK" in t]
+    assert len(alerts) == 1 and "leg_missing → close_cycle" in alerts[0]
     asyncio.run(bot.engine_pass())
-    assert len([t for t in messenger.texts() if t.startswith("RISK")]) == 1
+    assert len([t for t in messenger.texts() if "RISK" in t]) == 1
 
 
 async def _empty_positions() -> dict[str, dict[str, Any]]:

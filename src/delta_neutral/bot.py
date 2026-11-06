@@ -13,8 +13,10 @@ milliseconds, not after a fresh WebSocket handshake):
 
 Commands: /score [INSTRUMENT], /plan [INSTRUMENT], /fill CYCLE [VENUE] PRICE [HH:MM:SS] [SIZE],
 /amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS], /close CYCLE, /abort CYCLE, /status,
-/events. A manual instruction comes with buttons: "<venue> filled at ~P" confirms that leg at
-the quoted price, now; another price or an earlier fill time goes through /fill.
+/events. A manual instruction comes with buttons: "<venue> filled ~P" confirms that leg at the
+quoted price, now. Tap it the moment the venue fills: an API leg is only placed then, so the
+tap is the unhedged time. The exact price and time can be corrected afterwards with /amend.
+Every message is a card built in `cards.py`.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Protocol
 
+from delta_neutral import cards
 from delta_neutral.config import AppConfig, load_config
 from delta_neutral.env import load_env, require
 from delta_neutral.executor import (
@@ -41,16 +44,14 @@ from delta_neutral.executor import (
     rank_live,
     status_text,
 )
+from delta_neutral.instruments import InstrumentRegistry
 from delta_neutral.risk import SCHEMA as RISK_SCHEMA
 from delta_neutral.risk import RiskMonitor, paper_positions
-from delta_neutral.scorer import Candidate
 from delta_neutral.telegram import Buttons, TelegramClient
 from delta_neutral.venues.base import VenueAdapter
 from delta_neutral.venues.factory import build_venues
 
 log = logging.getLogger(__name__)
-
-TOP = 5
 
 HELP = (
     "/score [INSTRUMENT] - the best candidates right now, nothing opened\n"
@@ -71,23 +72,6 @@ class Messenger(Protocol):
     async def answer(self, callback_id: str, text: str = "") -> None: ...
 
 
-def ranking_text(candidates: list[Candidate], notional: Decimal, hold_minutes: int) -> str:
-    """The top candidates, two lines each: narrow enough for a phone."""
-    if not candidates:
-        return "no candidate: no instrument has quotes on two venues right now"
-    shown = min(TOP, len(candidates))
-    lines = [f"top {shown} of {len(candidates)} (${notional}/leg, {hold_minutes} min)"]
-    for n, c in enumerate(candidates[:TOP], 1):
-        per_usd = "-" if c.score is None else f"{c.score:.1f}"
-        lines.append(f"{n}. {c.instrument} long {c.long_venue} / short {c.short_venue}")
-        lines.append(
-            f"   cost ${c.cost_usd:.3f} (spread {c.spread_usd:.3f}, fees {c.fees_usd:.3f}, "
-            f"fund {c.funding_usd:.3f}) reward/$ {per_usd}"
-            + (f" [{' '.join(c.flags)}]" if c.flags else "")
-        )
-    return "\n".join(lines)
-
-
 def parse_fill_time(text: str, now: datetime) -> datetime:
     """HH:MM[:SS] on this machine's clock (the operator's local time), the latest such moment
     not after now: a fill reported just past midnight belongs to yesterday."""
@@ -96,14 +80,6 @@ def parse_fill_time(text: str, now: datetime) -> datetime:
     if at > local_now + timedelta(minutes=1):
         at -= timedelta(days=1)
     return at.astimezone(UTC)
-
-
-def _buttons(i: ManualInstruction) -> Buttons:
-    price = format(i.venue_price, "f")
-    row = [(f"{i.venue} filled at ~{price}", f"fill:{i.cycle_id}:{i.venue}:{price}")]
-    if i.phase == "open":
-        row.append(("Abort", f"abort:{i.cycle_id}"))
-    return [row]
 
 
 class EngineBot:
@@ -123,6 +99,7 @@ class EngineBot:
         self._tg = messenger
         self._chat_id = chat_id
         self._clock = clock
+        self._registry = InstrumentRegistry(config.instruments)
         self.executor = Executor(config, venues, db, clock=clock)
         self.monitor = RiskMonitor(
             config, self.executor, db, positions=paper_positions(db), clock=clock
@@ -150,10 +127,10 @@ class EngineBot:
             else:
                 await self._on_command(str(message.get("text", "")) if message else "")
         except (CycleError, InvalidOperation, ValueError, KeyError) as exc:
-            await self._say(f"error: {exc}")
+            await self._say(cards.error(exc))
         except Exception as exc:  # a venue or network failure: tell the operator, keep running
             log.exception("command failed")
-            await self._say(f"failed: {type(exc).__name__}: {exc}")
+            await self._say(f"⛔ failed: {cards.esc(type(exc).__name__)}: {cards.esc(exc)}")
 
     async def _on_command(self, text: str) -> None:
         command, *args = text.split() or [""]
@@ -161,7 +138,7 @@ class EngineBot:
             case "/score":
                 ranked = await rank_live(self._config, self._venues, *args[:1])
                 await self._say(
-                    ranking_text(
+                    cards.ranking(
                         ranked,
                         self._config.sizing.notional_per_leg_usd,
                         self._config.scoring.hold_minutes,
@@ -171,7 +148,6 @@ class EngineBot:
                 await self._instruct(
                     await plan_best(self.executor, self._config, self._venues, *args[:1])
                 )
-                await self._say(status_text(self._db).splitlines()[0])
             case "/fill":
                 await self._fill(args)
             case "/amend":
@@ -180,13 +156,13 @@ class EngineBot:
                 await self._instruct(await self.executor.request_close(int(args[0])))
             case "/abort":
                 self.executor.abort(int(args[0]), "operator")
-                await self._say(self._cycle_line(int(args[0])))
+                await self._say(self._card(int(args[0])))
             case "/status":
-                await self._say(status_text(self._db))
+                await self._say(cards.pre(status_text(self._db)))
             case "/events":
-                await self._say(self._events_text())
+                await self._say(cards.pre(self._events_text()))
             case _:
-                await self._say(HELP)
+                await self._say(cards.esc(HELP))
 
     async def _fill(self, args: list[str]) -> None:
         """/fill CYCLE [VENUE] PRICE [HH:MM[:SS]] [SIZE]: a time has colons, a size has none."""
@@ -204,7 +180,7 @@ class EngineBot:
                 filled_at=parse_fill_time(times[0], self._clock()) if times else None,
             )
         )
-        await self._say(self._cycle_line(int(cycle)))
+        await self._say(self._card(int(cycle)))
 
     async def _amend(self, args: list[str]) -> None:
         """/amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS]: correct the venue's latest fill."""
@@ -219,7 +195,7 @@ class EngineBot:
             venue_price=Decimal(fields["price"]) if "price" in fields else None,
             filled_at=parse_fill_time(fields["at"], self._clock()) if "at" in fields else None,
         )
-        await self._say(f"amended {venue} in cycle {cycle}\n" + self._cycle_line(int(cycle)))
+        await self._say(f"✏️ amended {cards.esc(venue)}\n" + self._card(int(cycle)))
 
     async def _on_button(self, data: str) -> None:
         kind, cycle, *rest = data.split(":")
@@ -228,10 +204,10 @@ class EngineBot:
             await self._instruct(
                 await self.executor.confirm_manual(int(cycle), Decimal(price), venue=venue)
             )
-            await self._say(self._cycle_line(int(cycle)))
+            await self._say(self._card(int(cycle)))
         elif kind == "abort":
             self.executor.abort(int(cycle), "operator")
-            await self._say(self._cycle_line(int(cycle)))
+            await self._say(self._card(int(cycle)))
 
     # -- the engine loop ------------------------------------------------------------------------
 
@@ -244,7 +220,7 @@ class EngineBot:
             (self._last_event,),
         ).fetchall()
         for rowid, rule, action, message in rows:
-            await self._say(f"RISK {rule} -> {action}: {message}")
+            await self._say(cards.risk(rule, action, message))
             self._last_event = rowid
         # actions the monitor took (a close) may need the operator's manual leg
         for cycle_id in {
@@ -260,17 +236,13 @@ class EngineBot:
         for i in instructions:
             if i.phase == "close":
                 self._announced_closes.add(i.cycle_id)
-            await self._tg.send(self._chat_id, "ACTION " + i.message(), _buttons(i))
+            await self._tg.send(self._chat_id, cards.instruction(i), cards.buttons(i))
 
-    async def _say(self, text: str) -> None:
-        await self._tg.send(self._chat_id, text)
+    async def _say(self, html: str) -> None:
+        await self._tg.send(self._chat_id, html)
 
-    def _cycle_line(self, cycle_id: int) -> str:
-        line = next(
-            (ln for ln in status_text(self._db).splitlines() if ln.startswith(f"#{cycle_id} ")),
-            None,
-        )
-        return line or f"cycle {cycle_id}"
+    def _card(self, cycle_id: int) -> str:
+        return cards.cycle(self._db, self._registry, cycle_id)
 
     def _events_text(self) -> str:
         rows = self._db.execute(
@@ -309,7 +281,7 @@ async def _run(config: AppConfig, every: float) -> None:
     db = open_engine_db(config.executor.db_path)
     try:
         bot = EngineBot(config, venues, db, tg, chat_id)
-        await tg.send(chat_id, f"engine up ({config.mode}). /help for commands")
+        await tg.send(chat_id, f"🟢 engine up ({config.mode}). /help for commands")
         await asyncio.gather(_poll(bot, tg), _engine(bot, every))
     finally:
         for venue in venues.values():
