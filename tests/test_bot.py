@@ -183,3 +183,50 @@ def test_risk_events_are_forwarded_once(tmp_path: Path) -> None:
 
 async def _empty_positions() -> dict[str, dict[str, Any]]:
     return {"qfex": {}}
+
+
+# -- the supervisor on Telegram ---------------------------------------------------------------
+
+
+class FakeSupervisor:
+    def __init__(self, proposals: list[Any]) -> None:
+        self.questions: list[str] = []
+        self._proposals = proposals
+
+    async def ask(self, question: str) -> Any:
+        from delta_neutral.supervisor.agent import Run
+
+        self.questions.append(question)
+        return Run(question, answer="cycle 1 is open <ok>", proposals=self._proposals, turns=2)
+
+
+def test_plain_text_goes_to_the_supervisor_and_a_proposal_needs_approval(tmp_path: Path) -> None:
+    from delta_neutral.supervisor.tools import Proposal
+
+    bot, messenger, _ = _bot(tmp_path)
+    asyncio.run(bot.handle(_message("/plan XAU-USD")))
+    (_, data), _ = messenger.sent[0][2][0]  # type: ignore[index]
+    asyncio.run(bot.handle(_press(data)))
+    assert _state(bot) == CycleState.OPEN
+
+    supervisor = FakeSupervisor([Proposal("close_cycle", 1, "test")])
+    bot._supervisor = supervisor  # type: ignore[assignment]
+    asyncio.run(bot.handle(_message("what is open?")))
+    assert supervisor.questions == ["what is open?"]
+    answer, card = messenger.sent[-2], messenger.sent[-1]
+    assert answer[1].startswith("cycle 1 is open &lt;ok&gt;")  # model text is escaped
+    assert card[2] == [
+        [("✅ approve", "approve:1:close_cycle"), ("✖ reject", "reject:1:close_cycle")]
+    ]
+    assert _state(bot) == CycleState.OPEN  # nothing happened yet
+
+    asyncio.run(bot.handle(_press("reject:1:close_cycle")))
+    assert _state(bot) == CycleState.OPEN
+    asyncio.run(bot.handle(_press("approve:1:close_cycle")))
+    assert _state(bot) == CycleState.CLOSING  # the executor ran it, on the operator's tap
+
+
+def test_ask_without_a_configured_supervisor(tmp_path: Path) -> None:
+    bot, messenger, _ = _bot(tmp_path)
+    asyncio.run(bot.handle(_message("/ask how much today?")))
+    assert messenger.texts() == ["supervisor not configured: see llm.supervisor and .env"]

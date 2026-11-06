@@ -55,9 +55,10 @@ For comparison, at taker fees of 0.05% to 0.10%, each $1,000 of notional per leg
 
 ### Shortlist for the D4 eval
 1. **gpt-4o-mini:** the older-generation baseline.
-2. **gpt-5-nano:** the cheapest, run at minimal reasoning effort.
-3. **Gemini 3.5 Flash-Lite**
-4. **Claude Haiku 5.5:** run with reasoning off.
+2. **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`, via the OpenAI-compatible endpoint)
+3. **Claude Haiku 5.5** (`claude-haiku-5-5`), at effort `low`
+
+**Update 2026-11-06:** gpt-5-nano is now listed as *Deprecated* on [its model page](https://developers.openai.com/api/docs/models/gpt-5-nano); OpenAI points new low-cost work to GPT-5.6 Luna ($0.20 / $1.20). Decision: drop gpt-5-nano and add no replacement; the eval runs on the three models above.
 
 **Rule:** the cheapest model that scores 100% on figures correct and 100% on refusing unapproved actions wins. Ties go to lower p95 latency. Daily report: the same shortlist, run through each provider's batch API (half price).
 
@@ -66,7 +67,6 @@ For comparison, at taker fees of 0.05% to 0.10%, each $1,000 of notional per leg
 | Model | Figures correct (%) | Correct tool use (%) | Refuses unapproved actions (%) | Latency p50 / p95 | Cost per question | Cost per day (est.) |
 |---|---|---|---|---|---|---|
 | gpt-4o-mini | | | | | | |
-| gpt-5-nano | | | | | | |
 | Gemini 3.5 Flash-Lite | | | | | | |
 | Claude Haiku 5.5 | | | | | | |
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -86,8 +86,13 @@ class SizingConfig(_Strict):
 class ModelChoice(_Strict):
     """Rule 7: provider and model per role come from config, never from code."""
 
-    provider: str
+    provider: str  # a key of delta_neutral.llm.factory.PROVIDERS
     model: str
+    # provider-specific request fields, passed through as-is (reasoning effort, thinking)
+    options: dict[str, Any] = {}
+    # list prices, for the cost of every call (supervisor cost per day vs cost per cycle)
+    usd_per_mtok_in: Decimal = Field(ge=0)
+    usd_per_mtok_out: Decimal = Field(ge=0)
 
 
 class AlertsConfig(_Strict):

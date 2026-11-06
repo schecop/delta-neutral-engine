@@ -13,8 +13,11 @@ milliseconds, not after a fresh WebSocket handshake):
 
 Commands: /score [INSTRUMENT], /plan [INSTRUMENT], /fill CYCLE [VENUE] PRICE [HH:MM:SS] [SIZE],
 /amend CYCLE VENUE [size=S] [price=P] [at=HH:MM:SS], /close CYCLE, /abort CYCLE, /status,
-/events. A manual instruction comes with buttons: "<venue> filled ~P" confirms that leg at the
-quoted price, now. Tap it the moment the venue fills: an API leg is only placed then, so the
+/events, /ask QUESTION (or any plain text): the read-only supervisor answers; an action it
+proposes comes with Approve / Reject buttons, and only an Approve runs it.
+
+A manual instruction comes with buttons: "<venue> filled ~P" confirms that leg at the quoted
+price, now. Tap it the moment the venue fills: an API leg is only placed then, so the
 tap is the unhedged time. The exact price and time can be corrected afterwards with /amend.
 Every message is a card built in `cards.py`.
 """
@@ -45,9 +48,13 @@ from delta_neutral.executor import (
     status_text,
 )
 from delta_neutral.instruments import InstrumentRegistry
+from delta_neutral.llm.factory import build_llm
 from delta_neutral.risk import SCHEMA as RISK_SCHEMA
 from delta_neutral.risk import RiskMonitor, paper_positions
+from delta_neutral.supervisor.agent import Supervisor
+from delta_neutral.supervisor.tools import Proposal, SupervisorTools, open_readonly
 from delta_neutral.telegram import Buttons, TelegramClient
+from delta_neutral.tracing import LangfuseExporter
 from delta_neutral.venues.base import VenueAdapter
 from delta_neutral.venues.factory import build_venues
 
@@ -62,7 +69,8 @@ HELP = (
     "/close CYCLE - close before the hold ends\n"
     "/abort CYCLE - cancel a cycle before any fill\n"
     "/status - recent cycles\n"
-    "/events - recent risk events"
+    "/events - recent risk events\n"
+    "/ask QUESTION - ask the supervisor (read-only); plain text works too"
 )
 
 
@@ -92,8 +100,10 @@ class EngineBot:
         chat_id: int,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        supervisor: Supervisor | None = None,
     ) -> None:
         self._config = config
+        self._supervisor = supervisor
         self._venues = venues
         self._db = db
         self._tg = messenger
@@ -161,6 +171,10 @@ class EngineBot:
                 await self._say(cards.pre(status_text(self._db)))
             case "/events":
                 await self._say(cards.pre(self._events_text()))
+            case "/ask":
+                await self._ask(" ".join(args))
+            case c if c and not c.startswith("/"):
+                await self._ask(text)
             case _:
                 await self._say(cards.esc(HELP))
 
@@ -197,6 +211,17 @@ class EngineBot:
         )
         await self._say(f"✏️ amended {cards.esc(venue)}\n" + self._card(int(cycle)))
 
+    async def _ask(self, question: str) -> None:
+        if not question:
+            raise ValueError("usage: /ask QUESTION")
+        if self._supervisor is None:
+            await self._say("supervisor not configured: see llm.supervisor and .env")
+            return
+        run = await self._supervisor.ask(question)
+        await self._say(cards.esc(run.answer) + f"\n<i>{run.turns} calls · ${run.cost_usd:.4f}</i>")
+        for p in run.proposals:
+            await self._tg.send(self._chat_id, *proposal_card(p))
+
     async def _on_button(self, data: str) -> None:
         kind, cycle, *rest = data.split(":")
         if kind == "fill":
@@ -208,6 +233,17 @@ class EngineBot:
         elif kind == "abort":
             self.executor.abort(int(cycle), "operator")
             await self._say(self._card(int(cycle)))
+        elif kind == "approve":  # the operator's tap: deterministic code runs the action
+            (action,) = rest
+            if action == "close_cycle":
+                await self._instruct(await self.executor.request_close(int(cycle)))
+            elif action == "abort_cycle":
+                self.executor.abort(int(cycle), "operator, approving a supervisor proposal")
+            else:
+                raise ValueError(f"unknown action {action}")
+            await self._say(f"✅ approved: {cards.esc(action)} #{cycle}\n" + self._card(int(cycle)))
+        elif kind == "reject":
+            await self._say(f"✖ rejected: {cards.esc(rest[0] if rest else '')} #{cycle}")
 
     # -- the engine loop ------------------------------------------------------------------------
 
@@ -251,6 +287,33 @@ class EngineBot:
         return "\n".join(f"{r[0][:19]} {r[1]} {r[2]}: {r[3]}" for r in rows) or "no risk events"
 
 
+def proposal_card(p: Proposal) -> tuple[str, Buttons]:
+    text = (
+        f"🤖 supervisor proposes: <b>{cards.esc(p.action)}</b> cycle #{p.cycle_id}\n"
+        f"{cards.esc(p.reason)}\nNothing happens unless you approve."
+    )
+    return text, [
+        [
+            ("✅ approve", f"approve:{p.cycle_id}:{p.action}"),
+            ("✖ reject", f"reject:{p.cycle_id}:{p.action}"),
+        ]
+    ]
+
+
+def build_supervisor(config: AppConfig) -> Supervisor | None:
+    """None when llm.supervisor's provider key is missing: the engine runs without it."""
+    choice = config.llm.get("supervisor")
+    if choice is None:
+        return None
+    try:
+        llm = build_llm(choice)
+    except Exception as exc:
+        log.warning("supervisor disabled: %s", exc)
+        return None
+    tools = SupervisorTools(open_readonly(config.executor.db_path))
+    return Supervisor(llm, choice, tools, exporter=LangfuseExporter.from_env())
+
+
 async def _poll(bot: EngineBot, tg: TelegramClient) -> None:
     offset: int | None = None
     while True:
@@ -280,7 +343,7 @@ async def _run(config: AppConfig, every: float) -> None:
     venues = build_venues(config)
     db = open_engine_db(config.executor.db_path)
     try:
-        bot = EngineBot(config, venues, db, tg, chat_id)
+        bot = EngineBot(config, venues, db, tg, chat_id, supervisor=build_supervisor(config))
         await tg.send(chat_id, f"🟢 engine up ({config.mode}). /help for commands")
         await asyncio.gather(_poll(bot, tg), _engine(bot, every))
     finally:
