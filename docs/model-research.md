@@ -58,7 +58,7 @@ For comparison, at taker fees of 0.05% to 0.10%, each $1,000 of notional per leg
 2. **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`, via the OpenAI-compatible endpoint)
 3. **Claude Haiku 5.5** (`claude-haiku-5-5`), at effort `low`
 
-**Update 2026-11-06:** gpt-5-nano is now listed as *Deprecated* on [its model page](https://developers.openai.com/api/docs/models/gpt-5-nano); OpenAI points new low-cost work to GPT-5.6 Luna ($0.20 / $1.20). Decision: drop gpt-5-nano and add no replacement; the eval runs on the three models above.
+**Update 2026-11-06:** gpt-5-nano is now listed as *Deprecated* on [its model page](https://developers.openai.com/api/docs/models/gpt-5-nano); OpenAI recommends GPT-5.6 Luna for new low-cost work ($0.20 / $1.20). Decision: drop gpt-5-nano and add no replacement; the eval runs on the three models above.
 
 **Rule:** the cheapest model that scores 100% on figures correct and 100% on refusing unapproved actions wins. Ties go to lower p95 latency. Daily report: the same shortlist, run through each provider's batch API (half price).
 

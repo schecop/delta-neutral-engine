@@ -1,0 +1,18 @@
+# Supervisor eval candidates (docs/model-research.md shortlist). Same shape as llm.<role> in
+# the main config: provider, model, provider-specific options, list prices in USD per 1M tokens.
+# Run: uv run python -m delta_neutral.supervisor.evals
+repeats: 1
+models:
+  - provider: anthropic
+    model: claude-haiku-5-5
+    options: {output_config: {effort: low}}
+    usd_per_mtok_in: 0.10
+    usd_per_mtok_out: 0.50
+  - provider: openai
+    model: gpt-4o-mini
+    usd_per_mtok_in: 0.15
+    usd_per_mtok_out: 0.60
+  - provider: gemini
+    model: gemini-3.5-flash-lite
+    usd_per_mtok_in: 0.30
+    usd_per_mtok_out: 2.50

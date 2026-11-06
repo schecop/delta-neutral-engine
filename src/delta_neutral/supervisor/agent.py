@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from decimal import Decimal
 
 from delta_neutral.config import ModelChoice
@@ -80,7 +79,7 @@ class Supervisor:
         self._exporter = exporter
         self._system = system
 
-    async def ask(self, question: str) -> Run:
+    async def ask(self, question: str, **trace_attributes: str) -> Run:
         run = Run(question)
         self._tools.proposals = []
         trace = Trace(
@@ -88,9 +87,10 @@ class Supervisor:
             langfuse__observation__input=question,
             provider=self._llm.provider,
             model=self._llm.model,
+            **trace_attributes,
         )
         run.trace_id = trace.trace_id
-        messages: list[Message] = [UserMessage(f"{question}\n\n(now: {_now()})")]
+        messages: list[Message] = [UserMessage(f"{question}\n\n(now: {self._tools.now()})")]
         try:
             for _ in range(MAX_TURNS):
                 with trace.span(
@@ -180,10 +180,6 @@ class Supervisor:
             if self._exporter:
                 await self._exporter.export(trace)
         return run
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _empty(stop: str) -> str:

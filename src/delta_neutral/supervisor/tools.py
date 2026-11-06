@@ -54,6 +54,10 @@ class SupervisorTools:
         self._clock = clock
         self.proposals: list[Proposal] = []  # collected during one run, shown by the bot
 
+    def now(self) -> str:
+        """The time the model is told it is: the same clock the tools' windows use."""
+        return self._clock().isoformat(timespec="seconds")
+
     # -- the tools ------------------------------------------------------------------------------
 
     def list_cycles(self, limit: int = 10, state: str | None = None) -> dict[str, Any]:
