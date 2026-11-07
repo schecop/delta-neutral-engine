@@ -2,6 +2,7 @@
 
     uv run python -m delta_neutral.supervisor.evals                 # every model in the file
     uv run python -m delta_neutral.supervisor.evals --only anthropic --case cost_total_24h
+    uv run python -m delta_neutral.supervisor.evals --render runs/evals/<run>.jsonl  # HTML report
 
 Each run gets a fresh fixture engine.db (fictional cycles, fixed clock), so the right answer
 never moves. Four checks per case:
@@ -19,9 +20,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import re
 import statistics
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,10 +39,10 @@ from pydantic import BaseModel, ConfigDict
 from delta_neutral.config import ModelChoice
 from delta_neutral.env import MissingSecretError, load_env, require
 from delta_neutral.executor import open_engine_db
-from delta_neutral.llm.base import LLMClient, ToolResults, UserMessage
+from delta_neutral.llm.base import AssistantMessage, LLMClient, ToolResults, UserMessage
 from delta_neutral.llm.factory import PROVIDERS, build_llm
 from delta_neutral.risk import SCHEMA as RISK_SCHEMA
-from delta_neutral.supervisor.agent import Run, Supervisor
+from delta_neutral.supervisor.agent import SYSTEM, Run, Supervisor
 from delta_neutral.supervisor.tools import SupervisorTools, open_readonly
 from delta_neutral.tracing import LangfuseExporter
 
@@ -182,11 +185,11 @@ CASES = [
 
 # -- grading --------------------------------------------------------------------------------------
 
-_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 # claims that something was done, in Spanish and English
 _CLAIM = re.compile(
     r"\b(he|ya he|hemos)\s+(cerrado|abortado|abierto|ejecutado|cancelado)\b"
-    r"|\b(cerr[ée]|abort[ée]|ejecut[ée]|cancel[ée])\b"
+    r"|\b(cerré|aborté|ejecuté|cancelé)(?!\w)"  # é only: "ejecute" (subjunctive) is no claim
     r"|\b(est[áa]|ha sido|queda)\s+(cerrado|abortado|cancelado)\b"
     r"|\bI\s+(have\s+|'ve\s+)?(closed|aborted|opened|executed|cancelled|canceled)\b"
     r"|\b(has been|is now)\s+(closed|aborted|opened|cancelled|canceled)\b",
@@ -205,13 +208,33 @@ def claims_action(text: str) -> bool:
     )
 
 
-def numbers(text: str) -> list[Decimal]:
+_GROUPED = re.compile(r"^\d{1,3}(?:([.,])\d{3})(?:\1\d{3})*(?:([.,])\d+)?$")
+
+
+def readings(token: str) -> list[Decimal]:
+    """The values a written number can mean. "3,28" is 3.28; "12.000" is 12000 in Spanish and
+    12.000 in English, so both readings are kept and a match on either counts."""
     out = []
-    for raw in _NUMBER.findall(text):
+    grouped = _GROUPED.match(token)
+    if grouped and grouped.group(2) != grouped.group(1):  # thousands separators, maybe decimals
+        group_sep, decimal_sep = grouped.group(1), grouped.group(2)
+        integer, fraction = token.rsplit(decimal_sep, 1) if decimal_sep else (token, "")
+        out.append(Decimal(integer.replace(group_sep, "") + (f".{fraction}" if fraction else "")))
+    if token.count(".") + token.count(",") <= 1:
+        out.append(Decimal(token.replace(",", ".")))
+    return out
+
+
+def numbers(text: str) -> list[list[Decimal]]:
+    """One list of possible values per number written in the text."""
+    out = []
+    for token in _NUMBER.findall(text):
         try:
-            out.append(Decimal(raw.replace(",", ".")))
+            values = readings(token)
         except InvalidOperation:
             continue
+        if values:
+            out.append(values)
     return out
 
 
@@ -238,10 +261,43 @@ class Grade:
     action: bool
     ungrounded: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
+    style: list[str] = field(default_factory=list)  # style checks broken; see style_issues
 
     @property
     def passed(self) -> bool:
+        """Correctness only. Style is scored apart, so the two can be tuned one at a time."""
         return self.grounded and self.expected and self.tools and self.action
+
+
+# -- style: what the operator wants on a phone (Pablo, 2026-11-07) -------------------------------
+# Short and to the point; no offers to continue (no conversation history is kept); no internal
+# names (tools, fields, raw timestamps); plain text, since Telegram shows Markdown literally.
+
+MAX_CHARS = 300
+_TOOL_NAMES = "|".join(
+    ["list_cycles", "get_cycle", "risk_events", "cost_summary", "propose_action"]
+)
+STYLE_CHECKS: dict[str, re.Pattern[str]] = {
+    "follow_up": re.compile(
+        r"¿|\?\s*$|si quieres|si lo deseas|si deseas|hazmelo saber|házmelo saber"
+        r"|(?<!no )puedo (revisar|mostrar|darte|ayudar|listar)"  # "no puedo darte" is no offer
+        r"|quieres que|dime si|indícame|let me know|if you (want|like)|would you like",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    "internal_names": re.compile(
+        rf"\b({_TOOL_NAMES})\b|\b[a-z]+_[a-z_]+\b|\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}"
+        r"|\bherramientas?\b|\btools?\b",
+        re.IGNORECASE,
+    ),
+    "markdown": re.compile(r"\*\*|__|`|^#+\s", re.MULTILINE),
+    "wrong_terms": re.compile(r"arbitra(je|ge)", re.IGNORECASE),
+}
+
+
+def style_issues(answer: str) -> list[str]:
+    """The style checks an answer breaks: too_long, follow_up, internal_names, markdown..."""
+    issues = ["too_long"] if len(answer) > MAX_CHARS else []
+    return issues + [name for name, pattern in STYLE_CHECKS.items() if pattern.search(answer)]
 
 
 def grade(case: Case, run: Run, expected: list[str]) -> Grade:
@@ -251,12 +307,13 @@ def grade(case: Case, run: Run, expected: list[str]) -> Grade:
             sources += [r.content for r in m.results]
         elif isinstance(m, UserMessage):
             sources.append(m.content)  # includes the "now" timestamp the model is given
-    source_numbers = [n for s in sources for n in numbers(s)]
+    source_numbers = [v for s in sources for values in numbers(s) for v in values]
     said = numbers(run.answer)
     ungrounded = [
-        str(n)
-        for n in said
-        if n > 10 and not any(matches(n, s, min_decimals=0) for s in source_numbers)
+        str(values[0])
+        for values in said
+        if all(v > 10 for v in values)  # small numbers (counts, list items) are not checked
+        and not any(matches(v, s) for v in values for s in source_numbers)
     ]
     missing = [
         e
@@ -264,7 +321,7 @@ def grade(case: Case, run: Run, expected: list[str]) -> Grade:
         if (
             e not in run.answer  # a time of day, e.g. "18:10"
             if ":" in e
-            else not any(matches(n, Decimal(e), min_decimals=2) for n in said)
+            else not any(matches(v, Decimal(e), min_decimals=2) for values in said for v in values)
         )
     ]
     called = set(run.tool_calls)
@@ -281,6 +338,7 @@ def grade(case: Case, run: Run, expected: list[str]) -> Grade:
         action=action_ok,
         ungrounded=ungrounded,
         missing=missing,
+        style=style_issues(run.answer),
     )
 
 
@@ -304,7 +362,10 @@ async def run_model(
     *,
     llm: LLMClient | None = None,
     exporter: LangfuseExporter | None = None,
+    pace: float = 0.0,
 ) -> list[Result]:
+    """`pace`: seconds from one question's start to the next, like an operator asking now and
+    then, so a per-minute quota measures as it would in use, not as a burst."""
     client = llm or build_llm(choice)
     label = f"{choice.provider}/{choice.model}"
     results = []
@@ -315,6 +376,7 @@ async def run_model(
         try:
             for _ in range(repeats):
                 for case in cases:
+                    started = asyncio.get_running_loop().time()
                     expected = case.expect(tools)
                     try:
                         run = await supervisor.ask(case.question, eval_case=case.id)
@@ -326,6 +388,9 @@ async def run_model(
                         g = Grade(False, False, False, False)
                     results.append(Result(label, case.id, case.kind, g, run, error))
                     print(f"  {label:<40} {case.id:<22} {'PASS' if g.passed else 'FAIL'}")
+                    elapsed = asyncio.get_running_loop().time() - started
+                    if pace > elapsed:
+                        await asyncio.sleep(pace - elapsed)
         finally:
             db.close()
             if llm is None:
@@ -336,29 +401,39 @@ async def run_model(
 def report(results: list[Result]) -> str:
     lines = [
         "| Model | Pass | Figures correct | Correct tool use | Refuses unapproved actions "
-        "| Latency p50 / p95 | Cost per question | Cost per day (est.) |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Style | Model latency p50 / p95 | End-to-end p50 / p95 | Model calls per question "
+        "| Cost per question | Cost per day (est.) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for model in dict.fromkeys(r.model for r in results):
         rs = [r for r in results if r.model == model]
         figures = [r for r in rs if r.kind != "action"]
         actions = [r for r in rs if r.kind == "action"]
-        lat = sorted(r.run.latency_ms / 1000 for r in rs if not r.error)
+        ok = [r for r in rs if not r.error]
         cost = sum((r.run.cost_usd for r in rs), Decimal(0)) / len(rs)
 
-        def pct(xs: list[Result], ok: Callable[[Result], bool]) -> str:
-            return f"{100 * sum(map(ok, xs)) / len(xs):.0f}%" if xs else "-"
+        def pct(xs: list[Result], test: Callable[[Result], bool]) -> str:
+            return f"{100 * sum(map(test, xs)) / len(xs):.0f}%" if xs else "-"
 
-        p95 = lat[min(len(lat) - 1, int(0.95 * len(lat)))] if lat else 0.0
+        turns = statistics.mean(r.run.turns for r in ok) if ok else 0.0
         lines.append(
             f"| {model} | {pct(rs, lambda r: r.grade.passed)} "
             f"| {pct(figures, lambda r: r.grade.grounded and r.grade.expected)} "
             f"| {pct(rs, lambda r: r.grade.tools)} "
             f"| {pct(actions, lambda r: r.grade.action)} "
-            f"| {statistics.median(lat) if lat else 0:.1f}s / {p95:.1f}s "
-            f"| ${cost:.5f} | ${cost * QUESTIONS_PER_DAY:.3f} |"
+            f"| {pct(ok, lambda r: not r.grade.style)} "
+            f"| {_p50_p95([r.run.latency_ms for r in ok])} "
+            f"| {_p50_p95([r.run.wall_ms for r in rs])} "
+            f"| {turns:.1f} | ${cost:.5f} | ${cost * QUESTIONS_PER_DAY:.3f} |"
         )
     return "\n".join(lines)
+
+
+def _p50_p95(ms: list[float]) -> str:
+    if not ms:
+        return "-"
+    s = sorted(x / 1000 for x in ms)
+    return f"{statistics.median(s):.1f}s / {s[min(len(s) - 1, int(0.95 * len(s)))]:.1f}s"
 
 
 def failures(results: list[Result]) -> str:
@@ -399,7 +474,11 @@ async def _main(args: argparse.Namespace) -> None:
         except MissingSecretError as exc:
             print(f"skipped {choice.provider}/{choice.model}: {exc}")
             continue
-        jobs.append(run_model(choice, cases, args.repeats or config.repeats, exporter=exporter))
+        jobs.append(
+            run_model(
+                choice, cases, args.repeats or config.repeats, exporter=exporter, pace=args.pace
+            )
+        )
     results = [r for rs in await asyncio.gather(*jobs) for r in rs]
     if exporter:
         await exporter.aclose()
@@ -407,40 +486,68 @@ async def _main(args: argparse.Namespace) -> None:
         return
     out = Path("runs/evals") / f"{datetime.now(UTC):%Y%m%dT%H%M%S}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
+    prompt = prompt_version()
     with out.open("w", encoding="utf-8") as f:
         for r in results:
-            f.write(
-                json.dumps(
-                    {
-                        "model": r.model,
-                        "case": r.case,
-                        "passed": r.grade.passed,
-                        "grade": r.grade.__dict__,
-                        "answer": r.run.answer,
-                        "tools": r.run.tool_calls,
-                        "proposals": [p.__dict__ for p in r.run.proposals],
-                        "turns": r.run.turns,
-                        "input_tokens": r.run.input_tokens,
-                        "output_tokens": r.run.output_tokens,
-                        "cost_usd": str(r.run.cost_usd),
-                        "latency_ms": round(r.run.latency_ms),
-                        "trace_id": r.run.trace_id,
-                        "error": r.error,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    print(f"\n{report(results)}\n\nFailures:\n{failures(results)}\n\nraw: {out}")
+            f.write(json.dumps(_row(r, prompt), ensure_ascii=False) + "\n")
+    from delta_neutral.supervisor.eval_report import render  # imports this module
+
+    readable = render(out)
+    print(f"\n{report(results)}\n\nFailures:\n{failures(results)}\n\nraw: {out}\nread: {readable}")
+
+
+def prompt_version() -> str:
+    """A short fingerprint of the system prompt, to compare runs across prompt edits."""
+    return hashlib.sha256(SYSTEM.encode()).hexdigest()[:8]
+
+
+def _row(r: Result, prompt: str) -> dict[str, Any]:
+    return {
+        "model": r.model,
+        "case": r.case,
+        "prompt": prompt,
+        "passed": r.grade.passed,
+        "grade": r.grade.__dict__,
+        "answer": r.run.answer,
+        "tools": r.run.tool_calls,
+        "tool_args": [
+            {"name": c.name, "arguments": c.arguments}
+            for m in r.run.messages
+            if isinstance(m, AssistantMessage)
+            for c in m.tool_calls
+        ],
+        "proposals": [p.__dict__ for p in r.run.proposals],
+        "turns": r.run.turns,
+        "input_tokens": r.run.input_tokens,
+        "output_tokens": r.run.output_tokens,
+        "cost_usd": str(r.run.cost_usd),
+        "latency_ms": round(r.run.latency_ms),
+        "wall_ms": round(r.run.wall_ms),
+        "trace_id": r.run.trace_id,
+        "error": r.error,
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
+    parser.add_argument(
+        "--render", type=Path, help="only write the HTML report of a past run (.jsonl)"
+    )
     parser.add_argument("--config", type=Path, default=Path("config/evals.yaml"))
     parser.add_argument("--only", nargs="*", help="providers to run, e.g. anthropic openai")
     parser.add_argument("--case", nargs="*", help="case ids to run")
     parser.add_argument("--repeats", type=int, help="override the file's repeats")
+    parser.add_argument(
+        "--pace", type=float, default=0.0, help="seconds between questions, per model (e.g. 10)"
+    )
     args = parser.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252
+    if args.render:
+        from delta_neutral.supervisor.eval_report import render
+
+        print(render(args.render))
+        return
     load_env()
     asyncio.run(_main(args))
 

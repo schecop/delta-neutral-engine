@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -38,12 +39,24 @@ both. The operator asks you questions on Telegram.
 
 Rules:
 - Every number you state must come from a tool result in this conversation, copied as given \
-(you may round to fewer decimals). Never compute totals, averages or differences yourself: \
-cost_summary does that. If no tool gives a number, say you don't have it.
-- You cannot act. To suggest closing or aborting a cycle, call propose_action; the operator \
-approves it on Telegram. Never say an action was done or will be done without approval.
-- Answer in the operator's language, short, plain text for a phone screen. Name the cycle ids \
-your numbers come from.
+(you may round to fewer decimals). Never compute anything yourself: no totals, averages, \
+differences, percentages or ratios. cost_summary does the totals; if no tool gives a number, \
+leave it out or say you don't have it.
+- You cannot act. When the operator asks to close or abort a cycle, call propose_action right \
+away, without asking for confirmation first: the Approve button on Telegram is the \
+confirmation. Then say it was proposed and needs approval. Never say an action was done, or \
+that you will do it later.
+- Answer only what was asked, in one or two short sentences with the figure requested. Do \
+not add other figures, details or context nobody asked for. Short, but always include the key \
+facts the question is about: cycle id, amount, time, duration.
+- Each question stands alone: no conversation history is kept. Do not offer more help, ask \
+questions back, or promise to check something later.
+- Talk like a trading desk colleague, not like software: never mention tools, field names or \
+how you work. Give times as HH:MM UTC, not raw timestamps. If something is not available or \
+you cannot do it, say so in one sentence, without explaining why.
+- Plain text only: no Markdown, no bold, no bullet lists.
+- Answer in the operator's language, plain text for a phone screen. Name the cycle ids your \
+numbers come from.
 - Times in tool results are UTC."""
 
 
@@ -57,7 +70,8 @@ class Run:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: Decimal = Decimal(0)
-    latency_ms: float = 0.0  # model time only
+    latency_ms: float = 0.0  # model time only, successful attempts
+    wall_ms: float = 0.0  # question to answer: model, tools, retries and their waits
     stop: str = ""
     trace_id: str = ""
     messages: list[Message] = field(default_factory=list)
@@ -81,6 +95,7 @@ class Supervisor:
 
     async def ask(self, question: str, **trace_attributes: str) -> Run:
         run = Run(question)
+        started = time.perf_counter()
         self._tools.proposals = []
         trace = Trace(
             "supervisor.ask",
@@ -151,6 +166,7 @@ class Supervisor:
             trace.root.error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
+            run.wall_ms = (time.perf_counter() - started) * 1000
             run.proposals = list(self._tools.proposals)
             run.messages = messages
             trace.finish(
@@ -172,6 +188,7 @@ class Supervisor:
                         "output_tokens": run.output_tokens,
                         "cost_usd": str(run.cost_usd),
                         "latency_ms": round(run.latency_ms),
+                        "wall_ms": round(run.wall_ms),
                         "stop": run.stop,
                         "proposals": len(run.proposals),
                     }

@@ -419,3 +419,13 @@ def test_exporter_posts_to_langfuse_with_basic_auth() -> None:
     assert seen[0].headers["x-langfuse-ingestion-version"] == "4"
     body: dict[str, Any] = json.loads(seen[0].content)
     assert "resourceSpans" in body
+
+
+def test_429_waits_as_long_as_the_provider_asks() -> None:
+    from delta_neutral.llm.http import MAX_WAIT, retry_wait
+
+    gemini = httpx.Response(429, text='{"error": {"details": [{"retryDelay": "37s"}]}}')
+    assert retry_wait(gemini, 0) == 38.0
+    assert retry_wait(httpx.Response(429, headers={"retry-after": "5"}), 0) == 6.0
+    assert retry_wait(httpx.Response(429, headers={"retry-after": "900"}), 0) == MAX_WAIT
+    assert retry_wait(None, 2) == 4.0
