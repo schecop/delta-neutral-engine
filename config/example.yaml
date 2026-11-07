@@ -60,11 +60,12 @@ llm:
   # options are provider-specific request fields, passed through as-is. Prices: USD per 1M
   # tokens, list price, for the cost of every call. The evals pick the model (docs/adr).
   supervisor:
-    provider: anthropic
-    model: claude-haiku-5-5
-    options: {output_config: {effort: low}}
-    usd_per_mtok_in: 0.10
-    usd_per_mtok_out: 0.50
+    # ADR-0002: Gemini on the free tier. Fallback: anthropic / claude-haiku-5-5,
+    # options {output_config: {effort: low}}, 0.10 / 0.50.
+    provider: gemini
+    model: gemini-3.5-flash-lite
+    usd_per_mtok_in: 0.30
+    usd_per_mtok_out: 2.50
 
 alerts:
   telegram_enabled: true

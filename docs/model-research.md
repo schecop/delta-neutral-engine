@@ -19,7 +19,7 @@ Prices are USD per 1M tokens, standard tier, from the official pricing pages on 
 |---|---|---|---|---|---|---|
 | **gpt-4o-mini** | OpenAI API | $0.15 / $0.60 · cache $0.075 · batch $0.075 / $0.30 | Not measured | 128k | Mature function calling | **Older-generation baseline.** Any newer model has to beat it. |
 | **gpt-5-nano** | OpenAI API | **$0.05 / $0.40** · cache $0.005 · batch $0.025 / $0.20 | Not measured | 400k | Function calling | **Cheapest candidate.** It is a reasoning model, so set reasoning effort to minimal. |
-| **Gemini 3.5 Flash-Lite** | Google AI Studio / Vertex | $0.30 / $2.50 · batch $0.15 / $1.25 · free tier available | Not measured | 1M | Function calling | The newest Flash-Lite. Google is replacing 2.5 Flash with it from 2026-12-01. The free tier helps for evals, but free-tier data may be used by Google. |
+| **Gemini 3.5 Flash-Lite** | Google AI Studio / Vertex | $0.30 / $2.50 · batch $0.15 / $1.25 · free tier available | Not measured | 1M | Function calling | The newest Flash-Lite. Google is replacing 2.5 Flash with it from 2026-12-01. The free tier helps for evals. Outside the EEA free-tier data may be used by Google; in the EEA the paid-service data terms apply to free use too. |
 | **Claude Haiku 5.5** | Anthropic API | $0.10 / $0.50 for prompts ≤100k (×5 above that) · cache $0.01 · batch $0.05 / $0.25 | 137 tok/s, TTFT 12.6s at medium effort. **Use reasoning off.** | 1M (price ×5 past 100k) | Haiku 4.5 scored 68.7 on BFCL; no 2026 score yet | Cheap and recent. Keep prompts well under 100k. |
 | *Reserve:* DeepSeek V4.1 Flash (`deepseek-flash`) | DeepSeek API (open weights) | $0.15 / $0.60 off-peak, $0.30 / $1.20 peak | 216 tok/s, TTFT 1.1s | 1M | Native tool calling | Fast. The trade-off is that data goes to a China-hosted API. |
 | *Reserve:* Gemini 2.5 Flash-Lite | Google AI Studio | $0.10 / $0.40 · free tier | Not measured | 1M | Function calling | Cheap fallback if 3.5 Flash-Lite is not needed. |
@@ -60,14 +60,18 @@ For comparison, at taker fees of 0.05% to 0.10%, each $1,000 of notional per leg
 
 **Update 2026-11-06:** gpt-5-nano is now listed as *Deprecated* on [its model page](https://developers.openai.com/api/docs/models/gpt-5-nano); OpenAI recommends GPT-5.6 Luna for new low-cost work ($0.20 / $1.20). Decision: drop gpt-5-nano and add no replacement; the eval runs on the three models above.
 
-**Rule:** the cheapest model that scores 100% on figures correct and 100% on refusing unapproved actions wins. Ties go to lower p95 latency. Daily report: the same shortlist, run through each provider's batch API (half price).
+**Rule (latency gate added 2026-11-06):** among the models that score 100% on figures correct and 100% on refusing unapproved actions, and whose end-to-end p95 (question to answer, including tool calls and retries) is at most 5 s, the cheapest wins. Ties go to lower end-to-end p95. Daily report: the same shortlist, run through each provider's batch API (half price).
 
-## Comparison on evals (fill in D4)
+## Comparison on evals (2026-11-07)
+
+Final prompt `98f58415`, 16 questions × 3 repeats per model. Latency is end to end (question to answer), measured over shared mobile data away from home (not yet confirmed on a stable connection). Cost per day assumes 30 questions at list price.
 
 | Model | Figures correct (%) | Correct tool use (%) | Refuses unapproved actions (%) | Latency p50 / p95 | Cost per question | Cost per day (est.) |
 |---|---|---|---|---|---|---|
-| gpt-4o-mini | | | | | | |
-| Gemini 3.5 Flash-Lite | | | | | | |
-| Claude Haiku 5.5 | | | | | | |
+| gpt-4o-mini | 100 | 100 | 91.7 | 2.7 s / 4.4 s | $0.00026 | $0.008 |
+| Gemini 3.5 Flash-Lite | 97.2 | 100 | 100 | 1.5 s / 2.0 s | $0.00068 | $0.020 ($0 on the free tier) |
+| Claude Haiku 5.5 | 100 | 100 | 100 | 2.3 s / 3.7 s | $0.00046 | $0.014 |
 
-**Choice:** → record in `docs/adr/` as `model-choice`.
+Measured cost is well below the earlier estimate: a question uses about 3.6k input tokens over two calls, not 24k.
+
+**Choice:** Gemini 3.5 Flash-Lite on the free tier, as an explicit exception to the rule (Haiku is the only one at 100%). Reasons, the prompt iterations and the fallback are in [ADR-0002](adr/0002-model-choice.md).
