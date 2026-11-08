@@ -46,6 +46,11 @@ def _usd(value: Decimal) -> str:
     return f"{value:.4f}"
 
 
+def _days(hours: float) -> str:
+    days = (Decimal(str(hours)) / 24).quantize(Decimal("0.1")).normalize()
+    return f"{days:f}"
+
+
 class SupervisorTools:
     def __init__(
         self, db: sqlite3.Connection, *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)
@@ -142,6 +147,7 @@ class SupervisorTools:
         n = len(rows)
         return {
             "window_hours": hours,
+            "window_days": _days(hours),  # so "30 days" is a tool figure, not the model's maths
             "closed_cycles": n,
             "cycle_ids": [r["id"] for r in rows],
             "predicted_cost_usd": _usd(predicted),

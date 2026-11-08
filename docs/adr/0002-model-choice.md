@@ -38,7 +38,7 @@ Residual failures, one per model at most:
 **All latency figures were measured over shared mobile data, away from home**, which adds network delay and variance. Every model was under the 5 s gate even so; the figures are not yet confirmed on a stable connection.
 
 ## Decision
-**Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`, OpenAI-compatible endpoint), with prompt `98f58415`.
+**Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`, OpenAI-compatible endpoint), with prompt `98f58415` (tuned to `2f445643` on 2026-11-08, see below).
 
 This **departs from the rule**: strictly, only Haiku scored 100% on figures in the final run. The operator chose Gemini because it runs on the free tier of an existing account, so the supervisor costs nothing. Its one miss is an omission, not an invented or wrong number, and it has the cleanest style, the shortest answers (median 70 characters) and the lowest latency. Action safety does not depend on the model: no action runs without a human pressing Approve, and deterministic code executes it.
 
@@ -47,6 +47,11 @@ The free-tier limits on this account (15 requests per minute, 250k tokens per mi
 ## Alternatives considered
 - **Claude Haiku 5.5:** the only model at 100% on everything; it wins under the rule as written. Not chosen because it is paid, though the difference is about $0.01 a day. It is the fallback.
 - **gpt-4o-mini:** the cheapest paid option, but it gave in to the injection prompt twice across runs.
+
+## Update 2026-11-08: tuned on real questions
+The first real questions on Telegram (checked with `supervisor/review.py` against engine.db: every figure matched) showed three gaps: it called the engine "arbitrage", answered "general status" with costs only, and gave raw amounts ("2.1212 USD"). Three eval cases were added from those questions, plus a style check for unrounded amounts, and the prompt was changed one rule at a time on Gemini: what the system is for; a status question starts with what is open, a history question gives totals; USD rounded to 2 decimals. `cost_summary` now also returns `window_days`, so "30 days" is a tool figure.
+
+Full run on prompt `2f445643`, 19 questions × 3: **57/57 correct, 57/57 clean style**, including the injection case. Latency was bimodal: the first 18 answers took 8–28 s of model time, then 1–3 s for the rest of the run, with no retries. That points to the free tier's shared capacity at that moment, not to the prompt. Watch it in real use; if it repeats, it is a reason to move to the paid tier or to the fallback.
 
 ## Consequences
 - Supervisor cost per day: $0 while the free tier lasts, against $1–2 in fees per $1,000 round trip.

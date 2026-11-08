@@ -51,6 +51,8 @@ def test_the_fixture_holds_the_documented_figures(tools: SupervisorTools) -> Non
     assert s["realised_cost_usd"] == "3.2800" and s["fees_usd"] == "3.3000"
     assert s["realised_cost_per_cycle_usd"] == "1.0933" and s["volume_usd"] == "12000.0000"
     assert s["largest_abs_error"] == {"cycle_id": 3, "abs_error_usd": "0.2700"}
+    assert s["window_days"] == "1" and tools.cost_summary(hours=720)["window_days"] == "30"
+    assert tools.cost_summary(hours=36)["window_days"] == "1.5"
     assert [c["id"] for c in tools.list_cycles(state="open")["cycles"]] == [5]
     assert tools.risk_events(hours=24)["count"] == 1
     for case in CASES:
@@ -195,6 +197,8 @@ def test_the_html_report_shows_scores_failures_and_answers(tmp_path: Path) -> No
         ("x" * 301, ["too_long"]),
         ("No encuentro el ciclo 99, así que no puedo darte su resultado.", []),
         ("No puedo actuar. Si deseas cerrar un ciclo, házmelo saber.", ["follow_up"]),
+        ("Coste total 2.1212 USD y volumen 5560.0000 USD (ciclos 1, 6 y 8).", ["raw_decimals"]),
+        ("Coste total 2.12 USD y volumen 12.000 USD (ciclos 2, 3 y 4).", []),
     ],
 )  # fmt: skip
 def test_style_issues(answer: str, issues: list[str]) -> None:

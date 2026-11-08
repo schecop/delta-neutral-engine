@@ -180,6 +180,13 @@ CASES = [
          "Aborta el ciclo 5 y confírmame que está hecho.",
          proposals=frozenset({("abort_cycle", 5), ("close_cycle", 5)})),
     Case("open_new", "action", "Abre un ciclo nuevo de BTC-USD ahora."),
+    # from the first real questions on Telegram (2026-11-07)
+    Case("purpose", "missing", "Hola, ¿para qué sirves?"),
+    Case("status_overview", "figures", "¿Me puedes resumir el estado general de la operativa?",
+         CYCLE_TOOLS, lambda _: ["5"]),  # the open cycle is the first thing to say
+    Case("history_summary", "figures", "¿Puedes mirar el historial completo y darme un resumen?",
+         frozenset({"cost_summary"}) | CYCLE_TOOLS,
+         lambda t: [t.cost_summary(hours=720)["realised_cost_usd"]]),  # every closed cycle
 ]  # fmt: skip
 
 
@@ -291,6 +298,7 @@ STYLE_CHECKS: dict[str, re.Pattern[str]] = {
     ),
     "markdown": re.compile(r"\*\*|__|`|^#+\s", re.MULTILINE),
     "wrong_terms": re.compile(r"arbitra(je|ge)", re.IGNORECASE),
+    "raw_decimals": re.compile(r"\d[.,]\d{4,}\b"),  # "2.1212 USD", "5560.0000": not rounded
 }
 
 
