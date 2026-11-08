@@ -18,7 +18,10 @@ import json
 import re
 import sys
 
-SECRET_FILE = re.compile(r"(^|[\\/\s\"'=:<>|;&(])\.env(?!\.example\b)(\.[\w.-]+)?(?=$|[\s\"'\\/;&|)<>])")
+SECRET_FILE = re.compile(
+    r"(^|[\\/\s\"'=:<>|;&(])\.env(?!\.example\b)(\.[\w.-]+)?"
+    r"(?=$|[\s\"'\\/;&|)<>])"
+)
 SECRET_VAR = re.compile(
     r"\$\{?\w*(API_KEY|SECRET|TOKEN|PASSWORD)\w*\}?"  # bash
     r"|\$env:\w*(API_KEY|SECRET|TOKEN|PASSWORD)"  # PowerShell
