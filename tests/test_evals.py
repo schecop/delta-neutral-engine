@@ -206,3 +206,30 @@ def test_style_does_not_change_correctness(tools: SupervisorTools) -> None:
     answer = "En las últimas 24h pagaste **3.30 USD**. Si quieres, puedo revisar el ciclo 3."
     g = grade(case, _run(answer, tools.cost_summary(hours=24)), case.expect(tools))
     assert g.passed and g.style == ["follow_up", "markdown"]
+
+
+# -- review of real runs (2026-11-08) ------------------------------------------------------------
+
+
+def test_review_parses_a_langfuse_trace_and_flags_figures_no_tool_gave() -> None:
+    from delta_neutral.supervisor.review import is_eval, parse, render
+
+    rows = [  # v2 observation rows, any order; io comes back as raw strings
+        {"traceId": "t1", "name": "tool get_cycle", "startTime": "2026-11-08T09:30:01Z",
+         "input": '{"cycle_id": 9}', "output": '{"id": 9, "realised_cost_usd": "1.5700"}'},
+        {"traceId": "t1", "name": "llm gemini-3.5-flash-lite",
+         "startTime": "2026-11-08T09:30:00.5Z", "totalCost": None},
+        {"traceId": "t1", "name": "supervisor.ask", "startTime": "2026-11-08T09:30:00Z",
+         "endTime": "2026-11-08T09:30:01.8Z", "input": "¿Coste del ciclo 9 en 72 horas?",
+         "output": "El ciclo 9 costó 1.57 USD, un 12.5% más.",
+         "metadata": {"attributes.model": "gemini-3.5-flash-lite",  # as Langfuse returns it
+                      "attributes.cost_usd": 0.0007, "attributes.proposals": []}},
+    ]  # fmt: skip
+    run = parse(rows)
+    assert run.tools == [("get_cycle", '{"cycle_id": 9}')] and run.seconds == 1.8
+    assert run.when == "2026-11-08 09:30" and run.cost_usd == 0.0007
+    assert run.model == "gemini-3.5-flash-lite" and not is_eval(rows[2])
+    assert is_eval({"metadata": {"attributes.eval_case": "fees_24h"}})
+    assert run.ungrounded == ["12.5"]  # 1.57 is from the tool; 12.5 was computed by the model
+    page = render([run])
+    assert "FIGURES NOT FROM TOOLS: 12.5" in page and "gemini-3.5-flash-lite" in page

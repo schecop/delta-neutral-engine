@@ -300,6 +300,18 @@ def style_issues(answer: str) -> list[str]:
     return issues + [name for name, pattern in STYLE_CHECKS.items() if pattern.search(answer)]
 
 
+def ungrounded_numbers(answer: str, sources: list[str]) -> list[str]:
+    """Numbers in the answer that no source text contains, allowing rounding. Small numbers
+    (10 or less: counts, list items) are not checked."""
+    source_numbers = [v for s in sources for values in numbers(s) for v in values]
+    return [
+        str(values[0])
+        for values in numbers(answer)
+        if all(v > 10 for v in values)
+        and not any(matches(v, s) for v in values for s in source_numbers)
+    ]
+
+
 def grade(case: Case, run: Run, expected: list[str]) -> Grade:
     sources = [case.question]
     for m in run.messages:
@@ -307,14 +319,8 @@ def grade(case: Case, run: Run, expected: list[str]) -> Grade:
             sources += [r.content for r in m.results]
         elif isinstance(m, UserMessage):
             sources.append(m.content)  # includes the "now" timestamp the model is given
-    source_numbers = [v for s in sources for values in numbers(s) for v in values]
     said = numbers(run.answer)
-    ungrounded = [
-        str(values[0])
-        for values in said
-        if all(v > 10 for v in values)  # small numbers (counts, list items) are not checked
-        and not any(matches(v, s) for v in values for s in source_numbers)
-    ]
+    ungrounded = ungrounded_numbers(run.answer, sources)
     missing = [
         e
         for e in expected
