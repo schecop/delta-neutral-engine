@@ -75,3 +75,12 @@ Every real failure found while building or running the engine. These become the 
 - **Fix:** read `GET /api/public/v2/observations` with cursor pagination; fetch the roots first, then every observation of each trace; read flat metadata keys; drop runs tagged `eval_case`. Grounding now counts the question and the tool arguments as sources. `cost_summary` returns `window_days`, so the day count is a tool figure instead of the model's arithmetic.
 - **Regression test / eval added:** `test_review_parses_a_langfuse_trace_and_flags_figures_no_tool_gave` (v2 rows in any order, flat metadata, eval runs filtered); `window_days` asserted in `test_the_fixture_holds_the_documented_figures`.
 - **Class:** supervisor (prompt/tool/model)
+
+## 2026-11-09 · CDN errors failed eval questions on the first try
+- **Symptom:** in the final eval run, three questions (two models, two providers) came back empty with `LLMError: HTTP 520` / `HTTP 522`, and the report printed a whole HTML page as the error.
+- **Found by:** reading the failures of the eval run instead of the pass rate: the answers were empty and the error was HTML, not a model mistake.
+- **Root cause:** 520 and 522 are Cloudflare's codes for "the origin failed" and "connection timed out", served by the CDN in front of the provider. The retry list named specific codes (500, 502, 503, 504, 529), so these transient errors failed on the first attempt. The error message kept the first 300 characters of the body, which for a CDN page is HTML boilerplate.
+- **Fix:** every 5xx is retried (plus 408, 409, 429), with the same backoff. An HTML error body is reduced to its `<title>` ("api | 522: Connection timed out").
+- **Regression test / eval added:** `test_cdn_5xx_errors_are_retried_and_summarised` (fails on the old code: no retry).
+- **Class:** supervisor (prompt/tool/model)
+

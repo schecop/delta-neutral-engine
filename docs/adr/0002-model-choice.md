@@ -35,7 +35,7 @@ Residual failures, one per model at most:
 - **Gemini**, risk events today, 1 of 3: it left out the unhedged duration. A missing figure, not a wrong one.
 - **Haiku**: none in the last three runs.
 
-**All latency figures were measured over shared mobile data, away from home**, which adds network delay and variance. Every model was under the 5 s gate even so; the figures are not yet confirmed on a stable connection.
+**All latency figures were measured over shared mobile data, away from home**, which adds network delay and variance. Every model was under the 5 s gate even so. **Confirmed on a stable home connection on 2026-11-09** (see below): the figures barely moved.
 
 ## Decision
 **Gemini 3.5 Flash-Lite** (`gemini-3.5-flash-lite`, OpenAI-compatible endpoint), with prompt `98f58415` (tuned to `2f445643` on 2026-11-08, see below).
@@ -53,8 +53,19 @@ The first real questions on Telegram (checked with `supervisor/review.py` agains
 
 Full run on prompt `2f445643`, 19 questions × 3: **57/57 correct, 57/57 clean style**, including the injection case. Latency was bimodal: the first 18 answers took 8–28 s of model time, then 1–3 s for the rest of the run, with no retries. That points to the free tier's shared capacity at that moment, not to the prompt. Watch it in real use; if it repeats, it is a reason to move to the paid tier or to the fallback.
 
+## Update 2026-11-09: final run at home, all three models
+19 questions × 3 per model on a stable home connection, prompt `2f445643`:
+
+| Model | Pass | Refuses unapproved actions | End-to-end p50 / p95 | Cost per question |
+|---|---|---|---|---|
+| Claude Haiku 5.5 | 96% (both misses were CDN errors, not answers) | 100% | 2.6 s / 4.5 s | $0.00048 |
+| gpt-4o-mini | 93% | 83% (the injection case again, 2 of 3) | 2.1 s / 3.6 s | $0.00029 |
+| Gemini 3.5 Flash-Lite | 98% | 100% | 1.4 s / 2.1 s | $0.00075 ($0 on the free tier) |
+
+Latency matches the mobile-data runs, so the network was never the bottleneck, and the slow start seen on 2026-11-08 did not repeat. Gemini's one miss wrote a duration in words ("setenta y cuatro segundos"), so the figure could not be checked. Three questions failed on CDN errors (520/522) that the client did not retry; fixed (FAILURES 2026-11-09). The decision stands.
+
 ## Consequences
 - Supervisor cost per day: $0 while the free tier lasts, against $1–2 in fees per $1,000 round trip.
 - Switching model is a config change only (`llm.supervisor` in `config/*.yaml`); the evals re-run in one command.
 - **Revisit** if: the free tier or its terms change; real answers start missing key facts; or rate limits are hit. Fallback: Haiku 5.5 at effort `low`.
-- Measure latency again on a stable connection before going live.
+- Latency measured again on a stable connection (2026-11-09): unchanged.

@@ -25,6 +25,15 @@ venues:
     reward:
       per_usd_volume: "1"
       instrument_multiplier: {}  # canonical symbol -> multiplier (default 1)
+  hyperliquid:
+    enabled: false
+    adapter: hyperliquid
+    execution: api         # market data only so far: order entry is pending in the conformance suite
+    max_leverage: "5"
+    fees:
+      taker: "0.00045"
+    reward:
+      per_usd_volume: "0"
 
 # canonical symbol -> {venue: venue-native symbol}. When a venue's contract is a fraction of the
 # instrument (its price is a tenth of the others'), give its contract_size instead:
@@ -38,6 +47,7 @@ instruments:
   XAU-USD:
     variational: XAU-PERP
     qfex: GOLD-USD
+    hyperliquid: "xyz:GOLD"  # builder-deployed (HIP-3) coins are "{dex}:{coin}"
 
 risk:
   leverage_per_leg: "2"

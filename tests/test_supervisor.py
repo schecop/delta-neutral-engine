@@ -429,3 +429,30 @@ def test_429_waits_as_long_as_the_provider_asks() -> None:
     assert retry_wait(httpx.Response(429, headers={"retry-after": "5"}), 0) == 6.0
     assert retry_wait(httpx.Response(429, headers={"retry-after": "900"}), 0) == MAX_WAIT
     assert retry_wait(None, 2) == 4.0
+
+
+def test_cdn_5xx_errors_are_retried_and_summarised(monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-11-09: Cloudflare 520/522 from two providers failed eval questions on the first try,
+    and the error dumped a whole HTML page."""
+    import delta_neutral.llm.http as http_module
+    from delta_neutral.llm.base import LLMError
+
+    async def no_wait(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("delta_neutral.llm.http.asyncio.sleep", no_wait)
+    page = "<!DOCTYPE html><html><head><title>api | 522: Connection timed out</title></head>"
+    statuses = iter([520, 522, 200])
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        status = next(statuses)
+        return httpx.Response(200, json={}) if status == 200 else httpx.Response(status, text=page)
+
+    async def go(handler: Any) -> dict[str, Any]:
+        client = httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler))
+        body, _ = await http_module.post_json(client, "/v1", {})
+        return body
+
+    assert asyncio.run(go(flaky)) == {}  # two CDN errors, then success
+    with pytest.raises(LLMError, match=r"HTML error page \(api \| 522: Connection timed out\)"):
+        asyncio.run(go(lambda _: httpx.Response(522, text=page)))

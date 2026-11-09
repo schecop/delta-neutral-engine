@@ -24,7 +24,7 @@ from delta_neutral.instruments import UnknownInstrumentError
 from delta_neutral.models import Execution, OrderRequest, OrderStatus, Side
 from delta_neutral.venues.base import NotTradableError, TradingVenue, VenueAdapter, as_trading
 from delta_neutral.venues.fake import FakeVenue
-from tests.venues.recorded import QFEX_QUOTABLE, qfex_venue, variational_venue
+from tests.venues.recorded import QFEX_QUOTABLE, hyperliquid_venue, qfex_venue, variational_venue
 
 _FAKE_MIDS = {"XAU-USD": Decimal(2400), "EUR-USD": Decimal("1.08")}
 
@@ -33,6 +33,7 @@ ADAPTER_FACTORIES: dict[str, Callable[[], VenueAdapter]] = {
     "fake-manual": lambda: FakeVenue("fake-manual", _FAKE_MIDS, execution=Execution.MANUAL),
     "variational": variational_venue,
     "qfex": lambda: qfex_venue(QFEX_QUOTABLE),
+    "hyperliquid": hyperliquid_venue,
 }
 
 # `module:attribute` of extra factories, used by the suite's own test to add broken adapters
@@ -43,7 +44,7 @@ if _extra := os.environ.get("CONFORMANCE_EXTRA"):
 # API venues whose order entry is not built yet. Their trading tests are strict xfails: the
 # suite shows them as pending, and the day trading lands they pass, fail as XPASS, and force
 # their removal from here. A venue listed here cannot trade: `as_trading` refuses it.
-PENDING_TRADING = {"qfex": "order entry lands in D4"}
+PENDING_TRADING = {"qfex": "order entry lands in D4", "hyperliquid": "market data only so far"}
 
 SIZE = Decimal("0.5")
 

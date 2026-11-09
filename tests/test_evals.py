@@ -7,6 +7,7 @@ import asyncio
 import json
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -218,7 +219,7 @@ def test_style_does_not_change_correctness(tools: SupervisorTools) -> None:
 def test_review_parses_a_langfuse_trace_and_flags_figures_no_tool_gave() -> None:
     from delta_neutral.supervisor.review import is_eval, parse, render
 
-    rows = [  # v2 observation rows, any order; io comes back as raw strings
+    rows: list[dict[str, Any]] = [  # v2 observation rows, any order; io as raw strings
         {"traceId": "t1", "name": "tool get_cycle", "startTime": "2026-11-08T09:30:01Z",
          "input": '{"cycle_id": 9}', "output": '{"id": 9, "realised_cost_usd": "1.5700"}'},
         {"traceId": "t1", "name": "llm gemini-3.5-flash-lite",

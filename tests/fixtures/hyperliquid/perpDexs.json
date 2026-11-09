@@ -1,0 +1,76 @@
+[
+ null,
+ {
+  "name": "xyz",
+  "fullName": "XYZ",
+  "deployer": "0x88806a71d74ad0a510b350545c9ae490912f0888",
+  "oracleUpdater": null,
+  "feeRecipient": "0x83ffcfb1f2ad843c474b2e28df86c721cb869d3a",
+  "assetToStreamingOiCap": [
+   [
+    "xyz:AAOI",
+    "25000000.0"
+   ],
+   [
+    "xyz:AAPL",
+    "200000000.0"
+   ],
+   [
+    "xyz:ACN",
+    "25000000.0"
+   ]
+  ],
+  "subDeployers": [
+   [
+    "registerAsset",
+    [
+     "0x7d16f116d252db609c56d27d6c9605eb03e16657",
+     "0x8c4190018486a2dbac2629d688136e8990170ff2",
+     "0xc0892b4f864807ec26dde6ad8dad6914e079059d"
+    ]
+   ],
+   [
+    "setOracle",
+    [
+     "0x1234567890545d1df9ee64b35fdd16966e08acec"
+    ]
+   ],
+   [
+    "setFeeRecipient",
+    [
+     "0x7d16f116d252db609c56d27d6c9605eb03e16657",
+     "0xc0892b4f864807ec26dde6ad8dad6914e079059d"
+    ]
+   ]
+  ],
+  "assetToFundingMultiplier": [
+   [
+    "xyz:AAOI",
+    "0.5"
+   ],
+   [
+    "xyz:AAPL",
+    "0.5"
+   ],
+   [
+    "xyz:ACN",
+    "0.5"
+   ]
+  ],
+  "assetToFundingInterestRate": [
+   [
+    "xyz:EUR",
+    "0.0"
+   ],
+   [
+    "xyz:GBP",
+    "0.0"
+   ],
+   [
+    "xyz:JPY",
+    "0.0"
+   ]
+  ],
+  "assetToFundingClamp": []
+ }
+]

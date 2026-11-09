@@ -1,4 +1,4 @@
-"""The one POST every provider adapter makes: JSON in, JSON out, retried on 429 and 5xx.
+"""The one POST every provider adapter makes: JSON in, JSON out, retried on 429 and any 5xx.
 
 On 429 the wait is the provider's own: the Retry-After header, or the `retryDelay` Gemini puts
 in its error body ("37s"); otherwise exponential backoff. Waits are capped at MAX_WAIT.
@@ -15,7 +15,7 @@ import httpx
 
 from delta_neutral.llm.base import LLMError
 
-RETRYABLE = {408, 409, 429, 500, 502, 503, 504, 529}
+RETRYABLE = {408, 409, 429}  # plus every 5xx, including CDN codes like Cloudflare's 520-524
 MAX_WAIT = 60.0
 _RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
 
@@ -47,10 +47,23 @@ async def post_json(
             latency = (time.perf_counter() - started) * 1000
             if response.status_code == 200:
                 return response.json(), latency
-            # the provider's error body names the problem; it never echoes the key
-            error = f"HTTP {response.status_code}: {response.text[:300]}"
-            if response.status_code not in RETRYABLE:
+            error = f"HTTP {response.status_code}: {_summary(response)}"
+            if not _retryable(response.status_code):
                 raise LLMError(error)
         if attempt + 1 < attempts:
             await asyncio.sleep(retry_wait(response, attempt))
     raise LLMError(f"after {attempts} attempts: {error}")
+
+
+def _retryable(status: int) -> bool:
+    return status in RETRYABLE or 500 <= status < 600
+
+
+def _summary(response: httpx.Response) -> str:
+    """The provider's error body names the problem (it never echoes the key); a CDN error page
+    is HTML, so only its title is kept."""
+    text = response.text
+    if "<html" in text[:500].lower():
+        title = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        return f"HTML error page ({title.group(1).strip()[:120] if title else 'no title'})"
+    return text[:300]

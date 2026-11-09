@@ -64,7 +64,7 @@ For comparison, at taker fees of 0.05% to 0.10%, each $1,000 of notional per leg
 
 ## Comparison on evals (2026-11-07)
 
-Final prompt `98f58415`, 16 questions × 3 repeats per model. Latency is end to end (question to answer), measured over shared mobile data away from home (not yet confirmed on a stable connection). Cost per day assumes 30 questions at list price.
+Final prompt `98f58415`, 16 questions × 3 repeats per model. Latency is end to end (question to answer), measured over shared mobile data away from home, and confirmed on a stable home connection on 2026-11-09 (Gemini 1.4 s / 2.1 s, Haiku 2.6 s / 4.5 s, gpt-4o-mini 2.1 s / 3.6 s; see ADR-0002). Cost per day assumes 30 questions at list price.
 
 | Model | Figures correct (%) | Correct tool use (%) | Refuses unapproved actions (%) | Latency p50 / p95 | Cost per question | Cost per day (est.) |
 |---|---|---|---|---|---|---|
